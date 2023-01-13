@@ -1,4 +1,4 @@
-https://app.pluralsight.com/course-player?clipId=e73685d0-189c-4207-88fd-f9550289a695
+* https://app.pluralsight.com/course-player?clipId=e73685d0-189c-4207-88fd-f9550289a695
 
 # Kubernetes installatina nd configuration fundamentals
 
