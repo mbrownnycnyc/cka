@@ -135,7 +135,7 @@
 * starts a pod and ensures the containers in pods are up and running
 * implement networking
 * can have many nodes in cluster based on scalability requirements
-* physical machines or VMs
+* nodes are either physical machines or VMs
 
 #### node components
 * each of these components run on all the nodes (including control plane node)
@@ -143,7 +143,7 @@
 * `kubelet`: responsible for starting/stopping pods on nodes.
   * communicates directly with `API Server` to monitor for changes in the environment... sending info and rcving commands relevant to the `kubelet`'s role (to start pods).
   * monitors API server for changes
-  * responsible for pod lifecycle (starting and stopping pods)
+  * responsible for pod lifecycle (starting and stopping pods [and containers])
   * reports to API server on Node and Pod state
   * Pod health probe execution
 * `kube-proxy`: responsible for pod networking and implementing out services abstraction ont he node itself.
@@ -153,30 +153,216 @@
   * routing traffic to Pods
   * load balancing
 * `container runtime`: the actual runtime env, responsible for pulling container image from container registry and providing execution environment for container image and pod abstraction
-  * downloads images and runs containers
+  * downloads images and runs containers.
   * wrapped within Container Runtime Interface (CRI)
-    * can swap out container runtime
-  * `containerd`: default runtime used by kubernetes, it is CRI compliant
+    * can swap out container runtime.
+  * `containerd`: default runtime used by kubernetes, it is CRI compliant.
     * in `v1.20`, Docker was depreciated as the default container runtime.  It will be removed in `v1.22`, but you can still use containers built for Docker.
 
 
 ### Cluster Add-on Pods
+* pods that provide special services to the cluster itself.
+  * DNS:
+    * provide DNS services within cluster via coreDNS server
+    * IPs for the services and the search suffix is placed into the network config for any pods within the cluster via the cluster API server
+    * commonly used for service discovery
+  * Ingress controllers (optional)
+    * advanced HTTP and layer 7 load balancers that handle content routing requests
+  * Dashboard (optional)
+    * for web based admin of k8s cluster
+  * network overlays
 
 
 ### Pod Operations
+* a cluster is established
+  * this means it has a control plane node and two worker nodes
+  * using `kubectl` we submit commands to configure a cluster, to the control plane node, that define
+    * we want 3 replicas of the pod (submitted to API server, and stored to `etcd`)
+    * controller manager will spin up the three requested replicas in replica set, which is submitted to the scheduler.
+    * the scheduler then tells API server that the pods need to be spun up on nodes it selects, and the config decisions are written to `etcd`
+      * which nodes did the pod replicas get scheduled on?
+      * depedant on resources requested in the pods, and the resources available in the nodes in the cluster.
+      * the `kubelet`s on the nodes will check in with the API server to see if there is any work queued for execution.
+        * once the queued work is received, the pod will be spun up.
+  * The controller manager receives information from the nodes regarding the state of pods running on each node.
+    * if a node drops, the node is no longer reporting state.
+      * controller manager will signal to the scheduler to locate a node to schedule the replica of the pod on.
+        * by default the control plane node is NOT to be used for pod replica targets, only on worker node.
+
 ### Service Operations
+* network or access point to applicaitons running within cluster
+* review at cluster level
+* pods are created within cluster for web app
+* expose access with a Service, running HTTP on tcp 80
+  * users can access on port 80
+  * fixed and persistent service endpoint, which will be a DNS name or ip address
+    * requests will be load balanced across replica set of pods
+* services abstract access to pods' services
+  * "self-healing" of underlying pods within a replica set occurs by the replica set controller
+
 ### Kubernetes Networking Fundamentals
+* every pod deployed gets assigned a unique IP addr.
+* pods on a node can communicate with all pods on all nodes with NAT
+* agents on a node (kubelet, etc) can communicate with all pods on that node
+
+#### k8s network design
+
+![](2023-01-13-16-47-22.png)
+
+* multi container pod within cluster (within a node)
+  * the containers within this pod communicate via namespaces within localhost
+* additional pods deployed to the cluster (within a node)
+  * these pods will inter-communicate via a software defined network bridge, using the real IPs of the pods themslves.
+* pod on one node need to reach out to a pod on a second node
+  * occurs between the real IPs of the pods themselves, so layer 2 and/or 3 connectivity must exist between the nodes
+  * overlay network
+    * if you don't control the underlying network infrastructure (inter-node), then you can deploy an overlay network to provide the overlay of layer 2/3 connectivity inter-node.
+* external services
+  * `kube-proxy` exposes the service within a cluster to external clients
+    * the `service` then interacts with the pods.
+
 
 ## Installing and Configuring Kubernetes
-### Module Overview
+
 ### Installation Considerations
+* where are you going to install?
+  * cloud
+    * two major use cases
+      * IaaS: VMs as nodes
+        * OS and k8s cluster must be managed.
+      * PaaS: managed service
+        * lose flexibility in versioning.
+  * on prem
+    * base metal or VMs
+  * which one to choose?
+    * skill set?
+    * cloud footprint already?
+* cluster networking
+  * overlay network versus metal r+s
+* scalability
+  * nodes, etc
+* HA and DR
+  * single control plane node?
+
 ### Installation Methods
+* desktop installation
+  * dev environments
+    * docker-desktop
+    * lens
+* kubeadm
+  * bootstraps cluster quickly
+* cloud IaaS/PaaS
+
 ### Installation Requirements
+* system requirements
+  * need linux (ubuntu/RHEL)
+  * 2 CPUs, 2GB RAM
+  * swap is disabled on *nix
+* container runtime
+  * CRI compatbiel
+    * containerd <-- we'll use this
+    * docker
+    * CRI-O
+* networking
+  * connectivity between all nodes
+  * nodes need unique hostnames
+  * nodes need unique MAC addresses
+
 ### Understanding Cluster Networking Ports
+* setting up security perimters
+  * control plane node provides services to the cluster
+  * working nodes need access to the API server
+* API server: tcp 6443, used by all cluster items (and admin via `kubectl`)
+* etcd: tcp 2379-2380, used by API server and any etcd replicas
+* Scheduler: tcp 10251, used by itself only (localhost)
+* Controller Manager: tcp 10252, used by itself only (localhost)
+* kubelet: tcp 10250, control plane services
+  * worker nodes also run kubelets, tcp 10250, control plane needs access to worker node's kubelets
+  * NodePort service: tcp 30000-32767, used by components that need access to the services published on the NodePorts
+    * NodePort service: exposes `services` via ports on each node in cluster, and port ranges are allocated from the tcp port range.
+
+
 ### Getting Kubernetes
+* github.com/kubernetes/kubernetes
+* *nix repos
+
 ### Building Your Own Cluster
+* steps
+  * install and configure packages
+  * create the cluster
+  * configure pod networking
+  * join nodes to cluster
+* required packages on all nodes (worker or control plane)
+  * container runtime: containerd
+  * `kubelet`
+  * `kubeadm`
+  * `kubectl`
+
 ### Installing Kubernetes on VMs
+* I'll be using WSL2 because I like making things difficult.
+```
+# distros are available: https://learn.microsoft.com/en-us/windows/wsl/install-manual
+Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
+#or
+azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle ubuntu.appx
+Add-AppxPackage .\ubuntu.appx
+
+#run ubuntu
+ubuntu
+#migrate ubuntu installation to WSL2
+wsl --set-version ubuntu 2
+#open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
+
+#then "safely" create four more ubuntu VMs:
+#https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/
+
+#backup the current running instance and unregister
+mkdir ~\wsl2
+wsl --export Ubuntu .\wsl2\ubuntu_after_update.tar.gz
+wsl --unregister Ubuntu
+# you can import this later if you wish
+
+#create a running instance (since we already installed the distro, the vhdx already exists, just invoke)
+ubuntu #exit before entering a username
+wsl --terminate ubuntu
+wsl -l -v
+wsl --export Ubuntu $env:userprofile\wsl2\ubuntu_baseline.tar.gz
+
+#create four VMs that will be nodes
+$nodes = "control","workernode1","workernode2","workernode3"
+foreach ($node in $nodes) {
+  write-host building $node node
+  #wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu_baseline.tar.gz
+  write-host converting $node node to WSL2 from WSL1
+  wsl --set-version ubuntu_$node 2
+}
+
+wsl -l -v
+
+#access each node by using the `--distribution` switch
+wsl -d ubuntu_control
+
+# go through each instance, run `apt update && apt upgrade`
+
+# maybe I need to do this: https://github.com/ocroz/wsl2-boot or https://stevegy.medium.com/wsl-2-static-ip-341603d84401
+
+
+#note that you can configure RAM, CPU, etc: https://learn.microsoft.com/en-us/windows/wsl/wsl-config
+```
+* interface with each WSL2 VM and install the kube stuff
+```
+sudo apt install -y containerd
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+echo deb https://api.kubernetes.io kubernetes-xenial main > /etc/apt/sources.list.d/kubernetes.list
+apt install -y kubelet kubeadm kubectl
+#disable upgrading of these packages by apt so that you can control what versions you're using:
+apt-mark hold kubelet kubeadm kubectl containerd
+```
+
+
 ### Lab Environment Overview
+* one control plane node, and three worker nodes
+
 ### Demo: Installing and Configuring containerd
 ### Demo: Installing and Configuring Kubernetes Packages
 ### Bootstrapping a Cluster with kubeadm
@@ -190,3 +376,4 @@
 ### Demo: Creating a Cluster in the Cloud with Azure Kubernetes Service
 4. Working with Your Kubernetes Cluster
 
+9
