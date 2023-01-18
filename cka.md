@@ -321,8 +321,8 @@ wsl --export Ubuntu $env:userprofile\wsl2\ubuntu_baseline.tar.gz
 
 
 #I'm going to attempt to go through this at this point in time for the single VM: https://github.com/ocroz/wsl2-boot
-  #this entire thing is actually unnecessarily complex
-  # I'm going to have to re-write this entire thing so it's less of a cluster fuck
+  #this entire thing is actually unnecessarily complex for this task, I'm fairly certain.
+  # I believe I don't care about maintaining static IPs, but I appreciate this work.
 
 #in powershell as the user
 mkdir -p $env:userprofile\repos && cd $env:userprofile\repos
