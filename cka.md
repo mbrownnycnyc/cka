@@ -308,25 +308,69 @@ azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221
 Add-AppxPackage .\ubuntu.appx
 
 #run ubuntu
-ubuntu
+ubuntu #exit without setting a user
 #migrate ubuntu installation to WSL2
 wsl --set-version ubuntu 2
 #open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
 
-#then "safely" create four more ubuntu VMs:
-#https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/
-
-#backup the current running instance and unregister
-mkdir ~\wsl2
-wsl --export Ubuntu .\wsl2\ubuntu_after_update.tar.gz
-wsl --unregister Ubuntu
-# you can import this later if you wish
-
-#create a running instance (since we already installed the distro, the vhdx already exists, just invoke)
-ubuntu #exit before entering a username
+#then "safely" create four more ubuntu VMs (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
 wsl --terminate ubuntu
 wsl -l -v
 wsl --export Ubuntu $env:userprofile\wsl2\ubuntu_baseline.tar.gz
+
+
+
+#I'm going to attempt to go through this at this point in time for the single VM: https://github.com/ocroz/wsl2-boot
+  #this entire thing is actually unnecessarily complex
+  # I'm going to have to re-write this entire thing so it's less of a cluster fuck
+
+#in powershell as the user
+mkdir -p $env:userprofile\repos && cd $env:userprofile\repos
+git clone https://github.com/ocroz/wsl2-boot
+cd wsl2-boot
+[Environment]::SetEnvironmentVariable("WSL2_BOOT", "%USERPROFILE%\repo\wsl2-boot", "User")
+[Environment]::SetEnvironmentVariable("WSL2_BOOT", "%USERPROFILE%\OneDrive - Digital Currency Group\repos\wsl2-boot", "User")
+
+#in ubuntu instance
+
+<# I'm not buying that this is needed
+sudo update-alternatives --config editor
+#select vim.basic
+visudo
+ %sudo   ALL=(ALL:ALL) ALL
+ %sudo   ALL=(ALL:ALL) NOPASSWD: ALL
+#>
+sudo apt update && sudo apt upgrade -y
+sudo ssh-keygen -A # not needed
+
+#configure resolv to be created by wsl2-boot things
+cd "/mnt/c/Users/MBrown/OneDrive - Digital Currency Group/repos/wsl2-boot"
+sed -i 's/generateResolvConf = false/generateResolvConf = true/' "linux/wsl.conf"
+sudo rm /etc/resolv.conf
+
+#configure the baseline wsl.conf file and other wsl2-boot things
+sudo cp linux/wsl.conf /etc/
+sudo cp linux/wsl-boot.sh /boot/
+sudo chmod 744 /boot/wsl-boot.sh
+
+
+#back in pwsh on the Windows host
+cd $env:userprofile\repos\wsl2-boot\
+cp windows\.bash_profile $env:userprofile\ #don't think we need this
+cp windows\.wslconfig $env:userprofile\ #okayyyy
+mkdir -p $env:userprofile\winbin\
+cp windows\wsl-boot.bat $env:userprofile\winbin\ # Or wherever in your Windows PATH
+
+#modify $env:userprofile\winbin\wsl-boot.bat
+# - Update the path to `wsl-boot.ps1` as per your settings
+# - Update the subnet as you need e.g. to replace "192.168.50" by "192.168.130"
+# - Add all your WSL distributions
+# - Replace `PowerShell` by `pwsh` if to use PowerShell 7.1+
+
+
+
+
+
 
 #create four VMs that will be nodes
 $nodes = "control","workernode1","workernode2","workernode3"
@@ -334,7 +378,6 @@ foreach ($node in $nodes) {
   write-host building $node node
   #wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu_baseline.tar.gz
   write-host converting $node node to WSL2 from WSL1
-  wsl --set-version ubuntu_$node 2
 }
 
 wsl -l -v
