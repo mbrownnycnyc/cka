@@ -324,6 +324,49 @@ wsl --export Ubuntu $env:userprofile\wsl2\ubuntu_baseline.tar.gz
   #this entire thing is actually unnecessarily complex for this task, I'm fairly certain.
   # I believe I don't care about maintaining static IPs, but I appreciate this work.
 
+# you can issue all the necessary commands from Windows using `wsl.exe -d [target]`
+
+
+# i think what's needed is the following
+# 1. create a WSL network with the same subnet
+# 2. create a wsl.conf file
+<#
+# root@Ubuntu:~# cat /etc/wsl.conf
+# https://docs.microsoft.com/en-us/windows/wsl/wsl-config#wsl-2-settings
+
+[automount]
+enabled = true
+root = /mnt/
+options = "metadata,umask=22,fmask=11"
+mountFsTab = true
+
+[network]
+hostname = Ubuntu
+generateHosts = true
+generateResolvConf = true
+
+[interop]
+enabled = true
+appendWindowsPath = false
+
+[user]
+default = ubuntu
+
+# for every server you want a static IP, you must set the static IP upon it's boot
+# [boot]
+# command = /boot/wsl-boot.sh -p "192.168.130" -g "192.168.130.1" -i "192.168.130.2" -n "1.1.1.1"
+#where wsl-boot.sh looks like this:
+dev=eth0
+currentIP=$(ip addr show $dev | grep 'inet\b' | awk '{print $2}' | head -n 1)
+ip addr del $currentIP dev $dev
+ip addr add $WslHostIP/24 broadcast $WslSubnetPrefix.255 dev $dev
+ip route add 0.0.0.0/0 via $GatewayIP dev $dev
+#>
+
+# maintain a /etc/host file, which you can do from windows 
+
+
+
 #in powershell as the user
 mkdir -p $env:userprofile\repos && cd $env:userprofile\repos
 git clone https://github.com/ocroz/wsl2-boot
