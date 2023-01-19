@@ -300,48 +300,93 @@
 
 ### Installing Kubernetes on VMs
 * I'll be using WSL2 because I like making things difficult.
+
+1. install ubuntu distro
+
+    ```
+    # distros are available: https://learn.microsoft.com/en-us/windows/wsl/install-manual
+    Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
+    #or
+    azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle ubuntu.appx
+    Add-AppxPackage .\ubuntu.appx
+    ```
+
+2. run ubuntu, migrate to WSL2, then terminate ubuntu, backup
+
+    ```
+    ubuntu #exit without setting a user
+    #migrate ubuntu installation to WSL2
+    wsl --set-version ubuntu 2
+    #open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
+
+    wsl -l -v
+    
+    #backup
+    wsl --export Ubuntu $env:userprofile\wsl2\ubuntu_baseline.tar.gz
+    ```
+
+3. build a reasonable host compute network on your host
+
+    a. create a WSL network with the same subnet
+    ```
+    # use this: https://github.com/skorhone/wsl2-custom-network
+    cd $repo\
+    git clone https://github.com/skorhone/wsl2-custom-network.git
+    cd wsl2-custom-network
+    import-module -Name .\hcn
+    
+    #mind the indents when dealing with the here string
+    $network = @"
+    {
+            "Name" : "WSL",
+            "Flags": 9,
+            "Type": "ICS",
+            "IPv6": false,
+            "IsolateSwitch": true,
+            "MaxConcurrentEndpoints": 1,
+            "Subnets" : [
+                {
+                    "ID" : "FC437E99-2063-4433-A1FA-F4D17BD55C92",
+                    "ObjectType": 5,
+                    "AddressPrefix" : "192.168.143.0/24",
+                    "GatewayAddress" : "192.168.143.1",
+                    "IpSubnets" : [
+                        {
+                            "ID" : "4D120505-4143-4CB2-8C53-DC0F70049696",
+                            "Flags": 3,
+                            "IpAddressPrefix": "192.168.143.0/24",
+                            "ObjectType": 6
+                        }
+                    ]
+                }
+            ],
+            "MacPools":  [
+                {
+                    "EndMacAddress":  "00-15-5D-52-CF-FF",
+                    "StartMacAddress":  "00-15-5D-52-C0-00"
+                }
+            ],
+            "DNSServerList" : "192.168.143.1"
+    }
+    "@
+
+    Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | Remove-HnsNetworkEx
+    New-HnsNetworkEx -Id B95D0C5E-57D4-412B-B571-18A81A16E005 -JsonString $network
+    ```
+
+4. create a wsl.conf template to be placed in `/etc/wsl.conf` on the VMs
+
 ```
-# distros are available: https://learn.microsoft.com/en-us/windows/wsl/install-manual
-Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
-#or
-azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle ubuntu.appx
-Add-AppxPackage .\ubuntu.appx
-
-#run ubuntu
-ubuntu #exit without setting a user
-#migrate ubuntu installation to WSL2
-wsl --set-version ubuntu 2
-#open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
-
-#then "safely" create four more ubuntu VMs (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
-wsl --terminate ubuntu
-wsl -l -v
-wsl --export Ubuntu $env:userprofile\wsl2\ubuntu_baseline.tar.gz
-
-
-
-#I'm going to attempt to go through this at this point in time for the single VM: https://github.com/ocroz/wsl2-boot
-  #this entire thing is actually unnecessarily complex for this task, I'm fairly certain.
-  # I believe I don't care about maintaining static IPs, but I appreciate this work.
-
-# you can issue all the necessary commands from Windows using `wsl.exe -d [target]`
-
-
-# i think what's needed is the following
-# 1. create a WSL network with the same subnet
-# 2. create a wsl.conf file
-<#
-# root@Ubuntu:~# cat /etc/wsl.conf
-# https://docs.microsoft.com/en-us/windows/wsl/wsl-config#wsl-2-settings
-
+# refer to the following for more info: https://docs.microsoft.com/en-us/windows/wsl/wsl-config#wsl-2-settings
+$wslconf = @'
 [automount]
 enabled = true
 root = /mnt/
-options = "metadata,umask=22,fmask=11"
+options = 'metadata,umask=22,fmask=11'
 mountFsTab = true
 
 [network]
-hostname = Ubuntu
+hostname = ubuntu_@@@@@
 generateHosts = true
 generateResolvConf = true
 
@@ -352,76 +397,65 @@ appendWindowsPath = false
 [user]
 default = ubuntu
 
-# for every server you want a static IP, you must set the static IP upon it's boot
-# [boot]
-# command = /boot/wsl-boot.sh -p "192.168.130" -g "192.168.130.1" -i "192.168.130.2" -n "1.1.1.1"
-#where wsl-boot.sh looks like this:
-dev=eth0
-currentIP=$(ip addr show $dev | grep 'inet\b' | awk '{print $2}' | head -n 1)
-ip addr del $currentIP dev $dev
-ip addr add $WslHostIP/24 broadcast $WslSubnetPrefix.255 dev $dev
-ip route add 0.0.0.0/0 via $GatewayIP dev $dev
-#>
+# I don't think the command likes this: https://learn.microsoft.com/en-us/windows/wsl/wsl-config#wsl-2-settings
+[boot]
+command = dev=eth0; currentIP=$(ip addr show $dev | grep 'inet\b' | awk '{print $2}' | head -n 1); localsubnet=192.168.143; ifaddr=$localsubnet.%%%%%; gateway=$localsubnet.1; ip -4 address flush label $dev; ip addr add $ifaddr/24 broadcast $localsubnet.255 dev $dev; ip route add 0.0.0.0/0 via $gateway dev $dev
+#tshoot with `ip route` and `cat /proc/net/arp`
+'@
+```
+
+5. power up the ubuntu instance and test
+```
+#in powershell
+wsl -l -v
+#start the ubuntu instance
+wsl -d ubuntu 'hostname'
+#you're still in powershell
+
+#write a /etc/wsl.conf
+10 | % { ($wslconf -replace "%%%%%","$_") -replace "@@@@@","baseline" | set-content \\wsl$\Ubuntu\etc\wsl.conf}
+
+#shutdown the VM instance
+wsl -t ubuntu
+
+#start it up again, verifying the /etc/wsl.conf is respected because the hostname changed
+wsl -d ubuntu 'hostname'
+```
+
+6. create four more ubuntu VMs (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
+```
+$nodes = "control","workernode1","workernode2","workernode3"
+$i=11 #this will be the iterator of the IP address
+
+foreach ($node in $nodes) {
+  
+  write-host building ubuntu_$node node with WSL host compute network IP ending in $i
+  wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu_baseline.tar.gz
+
+  write-host "old hostname is: $(wsl -d ubuntu_$node 'hostname')"
+ 
+  sleep 3
+  $i | % { ($wslconf -replace "%%%%%","$_") -replace "@@@@@","$node" | set-content \\wsl$\ubuntu_$node\etc\wsl.conf}
+  wsl -t ubuntu_$node
+  sleep 3
+  write-host "new hostname is: $(wsl -d ubuntu_$node 'hostname')"
+  $i++
+}
+```
+
+
+   
+power up ubuntu target instance
+10..15 | % { $wslconf -replace "%%%%%","$_" }
+
 
 # maintain a /etc/host file, which you can do from windows 
 
 
 
-#in powershell as the user
-mkdir -p $env:userprofile\repos && cd $env:userprofile\repos
-git clone https://github.com/ocroz/wsl2-boot
-cd wsl2-boot
-[Environment]::SetEnvironmentVariable("WSL2_BOOT", "%USERPROFILE%\repo\wsl2-boot", "User")
-[Environment]::SetEnvironmentVariable("WSL2_BOOT", "%USERPROFILE%\OneDrive - Digital Currency Group\repos\wsl2-boot", "User")
-
-#in ubuntu instance
-
-<# I'm not buying that this is needed
-sudo update-alternatives --config editor
-#select vim.basic
-visudo
- %sudo   ALL=(ALL:ALL) ALL
- %sudo   ALL=(ALL:ALL) NOPASSWD: ALL
-#>
-sudo apt update && sudo apt upgrade -y
-sudo ssh-keygen -A # not needed
-
-#configure resolv to be created by wsl2-boot things
-cd "/mnt/c/Users/MBrown/OneDrive - Digital Currency Group/repos/wsl2-boot"
-sed -i 's/generateResolvConf = false/generateResolvConf = true/' "linux/wsl.conf"
-sudo rm /etc/resolv.conf
-
-#configure the baseline wsl.conf file and other wsl2-boot things
-sudo cp linux/wsl.conf /etc/
-sudo cp linux/wsl-boot.sh /boot/
-sudo chmod 744 /boot/wsl-boot.sh
-
-
-#back in pwsh on the Windows host
-cd $env:userprofile\repos\wsl2-boot\
-cp windows\.bash_profile $env:userprofile\ #don't think we need this
-cp windows\.wslconfig $env:userprofile\ #okayyyy
-mkdir -p $env:userprofile\winbin\
-cp windows\wsl-boot.bat $env:userprofile\winbin\ # Or wherever in your Windows PATH
-
-#modify $env:userprofile\winbin\wsl-boot.bat
-# - Update the path to `wsl-boot.ps1` as per your settings
-# - Update the subnet as you need e.g. to replace "192.168.50" by "192.168.130"
-# - Add all your WSL distributions
-# - Replace `PowerShell` by `pwsh` if to use PowerShell 7.1+
-
-
-
-
-
 
 #create four VMs that will be nodes
-$nodes = "control","workernode1","workernode2","workernode3"
-foreach ($node in $nodes) {
-  write-host building $node node
-  #wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu_baseline.tar.gz
-  write-host converting $node node to WSL2 from WSL1
-}
+
 
 wsl -l -v
 
