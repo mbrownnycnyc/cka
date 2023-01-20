@@ -301,31 +301,26 @@
 ### Installing Kubernetes on VMs
 * I'll be using WSL2 because I like making things difficult.
 
-1. install ubuntu distro
+1. install ubuntu distro and convert to WSL2
+# https://github.com/kaisalmen/wsltooling/blob/main/installUbuntuLTS.ps1
 
     ```
     # distros are available: https://learn.microsoft.com/en-us/windows/wsl/install-manual
-    Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
+    mkdir -p $env:userprofile\wsl2\ubuntu\x64
+    #Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
     #or
-    azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle ubuntu.appx
-    Add-AppxPackage .\ubuntu.appx
-    ```
-
-2. run ubuntu, migrate to WSL2, then terminate ubuntu, backup
-
-    ```
-    ubuntu #exit without setting a user
-    #migrate ubuntu installation to WSL2
-    wsl --set-version ubuntu 2
-    #open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
-
-    wsl -l -v
+    azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle $env:userprofile\wsl2\ubuntu.appx
     
-    #backup
-    wsl --export Ubuntu $env:userprofile\wsl2\ubuntu_baseline.tar.gz
+    expand-archive $env:userprofile\wsl2\ubuntu.appx $env:userprofile\wsl2\ubuntu
+    expand-archive $env:userprofile\wsl2\ubuntu\Ubuntu*_x64.appx $env:userprofile\wsl2\ubuntu\x64
+
+    #the basic store installation is different: Add-AppxPackage .\ubuntu.appx
+    wsl --import ubuntu_baseline $env:userprofile\wsl2 $env:userprofile\wsl2\ubuntu\x64\install.tar.gz
+    wsl --set-version ubuntu_baseline 2
+    #open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
     ```
 
-3. build a reasonable host compute network on your host
+2. build a reasonable host compute network on your host
 
     a. create a WSL network with the same subnet
     ```
@@ -374,6 +369,24 @@
     New-HnsNetworkEx -Id B95D0C5E-57D4-412B-B571-18A81A16E005 -JsonString $network
     ```
 
+3. create a wsl.sh file
+
+```
+$wslconfsh = @'
+#!/bin/bash
+dev=eth0
+currentIP=$(ip addr show $dev | grep 'inet\b' | awk '{print $2}' | head -n 1)
+localsubnet=192.168.143
+ifaddr=$localsubnet.%%%%%
+gateway=$localsubnet.1
+ip -4 address flush label $dev
+ip addr add $ifaddr/24 broadcast $localsubnet.255 dev $dev
+ip route add 0.0.0.0/0 via $gateway dev $dev
+#tshoot with `ip route` and `cat /proc/net/arp`
+'@
+```
+
+ 
 4. create a wsl.conf template to be placed in `/etc/wsl.conf` on the VMs
 
 ```
@@ -397,10 +410,8 @@ appendWindowsPath = false
 [user]
 default = ubuntu
 
-# I don't think the command likes this: https://learn.microsoft.com/en-us/windows/wsl/wsl-config#wsl-2-settings
 [boot]
-command = dev=eth0; currentIP=$(ip addr show $dev | grep 'inet\b' | awk '{print $2}' | head -n 1); localsubnet=192.168.143; ifaddr=$localsubnet.%%%%%; gateway=$localsubnet.1; ip -4 address flush label $dev; ip addr add $ifaddr/24 broadcast $localsubnet.255 dev $dev; ip route add 0.0.0.0/0 via $gateway dev $dev
-#tshoot with `ip route` and `cat /proc/net/arp`
+command = /etc/wsl_conf.sh
 '@
 ```
 
@@ -409,20 +420,28 @@ command = dev=eth0; currentIP=$(ip addr show $dev | grep 'inet\b' | awk '{print 
 #in powershell
 wsl -l -v
 #start the ubuntu instance
-wsl -d ubuntu 'hostname'
+wsl -d ubuntu_baseline hostname
+wsl -d ubuntu_baseline hostname -I
 #you're still in powershell
 
 #write a /etc/wsl.conf
-10 | % { ($wslconf -replace "%%%%%","$_") -replace "@@@@@","baseline" | set-content \\wsl$\Ubuntu\etc\wsl.conf}
+10 | % { ($wslconfsh -replace "%%%%%","$_") | set-content \\wsl$\ubuntu_baseline\etc\wsl_conf.sh}
+10 | % { ($wslconf -replace "@@@@@","baseline") | set-content \\wsl$\ubuntu_baseline\etc\wsl.conf}
+wsl -d ubuntu_baseline /usr/bin/chmod 744 /etc/wsl_conf.sh
+
+wsl -d ubuntu_baseline ls -al /etc/wsl_conf.sh
 
 #shutdown the VM instance
-wsl -t ubuntu
+wsl -t ubuntu_baseline
+
+sleep 8
 
 #start it up again, verifying the /etc/wsl.conf is respected because the hostname changed
-wsl -d ubuntu 'hostname'
+wsl -d ubuntu_baseline hostname
+wsl -d ubuntu_baseline hostname -I
 ```
 
-6. create four more ubuntu VMs (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
+6. create four ubuntu containers, convert them to be hosted as WSL2 VMs, and create /etc/wsl.conf (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
 ```
 $nodes = "control","workernode1","workernode2","workernode3"
 $i=11 #this will be the iterator of the IP address
@@ -431,14 +450,19 @@ foreach ($node in $nodes) {
   
   write-host building ubuntu_$node node with WSL host compute network IP ending in $i
   wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu_baseline.tar.gz
-
-  write-host "old hostname is: $(wsl -d ubuntu_$node 'hostname')"
+  
+  write-host converting ubuntu_$node node to WSL2 VM
+  wsl --set-version ubuntu_$node 2
+  write-host "old host info: $(wsl -d ubuntu_$node hostname) at $(wsl -d ubuntu_$node hostname -I)"
  
   sleep 3
-  $i | % { ($wslconf -replace "%%%%%","$_") -replace "@@@@@","$node" | set-content \\wsl$\ubuntu_$node\etc\wsl.conf}
+  $i | % { ($wslconfsh -replace "%%%%%","$_") -replace "@@@@@",$node | set-content \\wsl$\ubuntu_$node\etc\wsl_conf.sh}
+  $i | % { ($wslconf -replace "@@@@@",$node) | set-content \\wsl$\ubuntu_$node\etc\wsl.conf}
+  wsl -d ubuntu_$node /usr/bin/chmod 744 /etc/wsl_conf.sh
+
   wsl -t ubuntu_$node
   sleep 3
-  write-host "new hostname is: $(wsl -d ubuntu_$node 'hostname')"
+  write-host "new host info: $(wsl -d ubuntu_$node hostname) at $(wsl -d ubuntu_$node hostname -I)"
   $i++
 }
 ```
