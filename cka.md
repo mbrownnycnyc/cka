@@ -202,8 +202,8 @@
 
 ### Kubernetes Networking Fundamentals
 * every pod deployed gets assigned a unique IP addr.
-* pods on a node can communicate with all pods on all nodes with NAT
-* agents on a node (kubelet, etc) can communicate with all pods on that node
+* pods on a node can communicate with all pods on all nodes in a cluster without NAT.
+* agents on a node (kubelet, etc) can communicate with all pods on that node.
 
 #### k8s network design
 
@@ -235,7 +235,7 @@
   * on prem
     * base metal or VMs
   * which one to choose?
-    * skill set?
+    * skill set?c
     * cloud footprint already?
 * cluster networking
   * overlay network versus metal r+s
@@ -249,7 +249,7 @@
   * dev environments
     * docker-desktop
     * lens
-* kubeadm
+* `kubeadm`
   * bootstraps cluster quickly
 * cloud IaaS/PaaS
 
@@ -273,10 +273,10 @@
   * control plane node provides services to the cluster
   * working nodes need access to the API server
 * API server: tcp 6443, used by all cluster items (and admin via `kubectl`)
-* etcd: tcp 2379-2380, used by API server and any etcd replicas
+* `etcd`: tcp 2379-2380, used by API server and any etcd replicas
 * Scheduler: tcp 10251, used by itself only (localhost)
 * Controller Manager: tcp 10252, used by itself only (localhost)
-* kubelet: tcp 10250, control plane services
+* `kubelet`: tcp 10250, control plane services
   * worker nodes also run kubelets, tcp 10250, control plane needs access to worker node's kubelets
   * NodePort service: tcp 30000-32767, used by components that need access to the services published on the NodePorts
     * NodePort service: exposes `services` via ports on each node in cluster, and port ranges are allocated from the tcp port range.
@@ -293,87 +293,74 @@
   * configure pod networking
   * join nodes to cluster
 * required packages on all nodes (worker or control plane)
-  * container runtime: containerd
+  * container runtime: `containerd`
   * `kubelet`
-  * `kubeadm`
-  * `kubectl`
+  * `kubeadm`: create cluster, joins nodes
+  * `kubectl`: configure pod network, etc.
+* 
 
 ### Installing Kubernetes on VMs
 * I'll be using WSL2 because I like making things difficult.
+* This is split into two different sections, steps 1-8 are initial configuration steps and then step 9-10 will be for on-demand lab spin up.
 
-1. install ubuntu distro and convert to WSL2
-# https://github.com/kaisalmen/wsltooling/blob/main/installUbuntuLTS.ps1
 
-    ```
-    # distros are available: https://learn.microsoft.com/en-us/windows/wsl/install-manual
-    mkdir -p $env:userprofile\wsl2\ubuntu\x64
-    #Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
-    #or
-    azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle $env:userprofile\wsl2\ubuntu.appx
-    
-    expand-archive $env:userprofile\wsl2\ubuntu.appx $env:userprofile\wsl2\ubuntu
-    expand-archive $env:userprofile\wsl2\ubuntu\Ubuntu*_x64.appx $env:userprofile\wsl2\ubuntu\x64
+1. build a reasonable host compute network on your host
 
-    #the basic store installation is different: Add-AppxPackage .\ubuntu.appx
-    wsl --import ubuntu_baseline $env:userprofile\wsl2 $env:userprofile\wsl2\ubuntu\x64\install.tar.gz
-    wsl --set-version ubuntu_baseline 2
-    #open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
-    ```
+```
+wsl --shutdown
+# use this: https://github.com/skorhone/wsl2-custom-network
+cd $repo\
+git clone https://github.com/skorhone/wsl2-custom-network.git
+cd wsl2-custom-network
+import-module -Name .\hcn
 
-2. build a reasonable host compute network on your host
+#mind the indents when dealing with the here string
+#https://learn.microsoft.com/en-us/windows-server/networking/technologies/hcn/hcn-json-document-schemas
+$network = @"
+{
+        "Name" : "WSL",
+        "Flags": 9,
+        "Type": "ICS",
+        "IPv6": false,
+        "IsolateSwitch": true,
+        "MaxConcurrentEndpoints": 1,
+        "Subnets" : [
+            {
+                "ID" : "FC437E99-2063-4433-A1FA-F4D17BD55C92",
+                "ObjectType": 5,
+                "AddressPrefix" : "192.168.143.0/24",
+                "GatewayAddress" : "192.168.143.1",
+                "IpSubnets" : [
+                    {
+                        "ID" : "4D120505-4143-4CB2-8C53-DC0F70049696",
+                        "Flags": 3,
+                        "IpAddressPrefix": "192.168.143.0/24",
+                        "ObjectType": 6
+                    }
+                ]
+            }
+        ],
+        "MacPools":  [
+            {
+                "EndMacAddress":  "00-15-5D-52-CF-FF",
+                "StartMacAddress":  "00-15-5D-52-C0-00"
+            }
+        ],
+        "DNSServerList" : "192.168.143.1"
+}
+"@
 
-    a. create a WSL network with the same subnet
-    ```
-    # use this: https://github.com/skorhone/wsl2-custom-network
-    cd $repo\
-    git clone https://github.com/skorhone/wsl2-custom-network.git
-    cd wsl2-custom-network
-    import-module -Name .\hcn
-    
-    #mind the indents when dealing with the here string
-    $network = @"
-    {
-            "Name" : "WSL",
-            "Flags": 9,
-            "Type": "ICS",
-            "IPv6": false,
-            "IsolateSwitch": true,
-            "MaxConcurrentEndpoints": 1,
-            "Subnets" : [
-                {
-                    "ID" : "FC437E99-2063-4433-A1FA-F4D17BD55C92",
-                    "ObjectType": 5,
-                    "AddressPrefix" : "192.168.143.0/24",
-                    "GatewayAddress" : "192.168.143.1",
-                    "IpSubnets" : [
-                        {
-                            "ID" : "4D120505-4143-4CB2-8C53-DC0F70049696",
-                            "Flags": 3,
-                            "IpAddressPrefix": "192.168.143.0/24",
-                            "ObjectType": 6
-                        }
-                    ]
-                }
-            ],
-            "MacPools":  [
-                {
-                    "EndMacAddress":  "00-15-5D-52-CF-FF",
-                    "StartMacAddress":  "00-15-5D-52-C0-00"
-                }
-            ],
-            "DNSServerList" : "192.168.143.1"
-    }
-    "@
+Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | Remove-HnsNetworkEx
+New-HnsNetworkEx -Id B95D0C5E-57D4-412B-B571-18A81A16E005 -JsonString $network
+Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | convertto-json -depth 100 | set-content c:\users\public\wsl_hcn.json
+```
 
-    Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | Remove-HnsNetworkEx
-    New-HnsNetworkEx -Id B95D0C5E-57D4-412B-B571-18A81A16E005 -JsonString $network
-    ```
-
-3. create a wsl.sh file
+2. create a wsl_conf.sh file
 
 ```
 $wslconfsh = @'
-#!/bin/bash
+#!/usr/bin/env bash
+echo $time > /var/log/out.out
 dev=eth0
 currentIP=$(ip addr show $dev | grep 'inet\b' | awk '{print $2}' | head -n 1)
 localsubnet=192.168.143
@@ -382,12 +369,12 @@ gateway=$localsubnet.1
 ip -4 address flush label $dev
 ip addr add $ifaddr/24 broadcast $localsubnet.255 dev $dev
 ip route add 0.0.0.0/0 via $gateway dev $dev
-#tshoot with `ip route` and `cat /proc/net/arp`
+
 '@
 ```
 
  
-4. create a wsl.conf template to be placed in `/etc/wsl.conf` on the VMs
+3. create a wsl.conf template to be placed in `/etc/wsl.conf` on the VMs (note that the automatic execution of boot command will work on Windows 11 or server 2022)
 
 ```
 # refer to the following for more info: https://docs.microsoft.com/en-us/windows/wsl/wsl-config#wsl-2-settings
@@ -410,9 +397,31 @@ appendWindowsPath = false
 [user]
 default = ubuntu
 
+
+# "The Boot setting is only available on Windows 11 and Server 2022." - https://learn.microsoft.com/en-us/windows/wsl/wsl-config#boot-settings
 [boot]
-command = /etc/wsl_conf.sh
+command = /usr/bin/bash /boot/wsl_conf.sh
+
 '@
+```
+
+4. install ubuntu distro and convert to WSL2
+* https://github.com/kaisalmen/wsltooling/blob/main/installUbuntuLTS.ps1
+
+```
+# distros are available: https://learn.microsoft.com/en-us/windows/wsl/install-manual
+mkdir -p $env:userprofile\wsl2\ubuntu\x64
+#Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
+#or
+azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle $env:userprofile\wsl2\ubuntu.appx
+
+expand-archive $env:userprofile\wsl2\ubuntu.appx $env:userprofile\wsl2\ubuntu
+expand-archive $env:userprofile\wsl2\ubuntu\Ubuntu*_x64.appx $env:userprofile\wsl2\ubuntu\x64
+
+#the basic store installation is different: Add-AppxPackage .\ubuntu.appx
+wsl --import ubuntu_baseline $env:userprofile\wsl2 $env:userprofile\wsl2\ubuntu\x64\install.tar.gz
+wsl --set-version ubuntu_baseline 2
+#open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
 ```
 
 5. power up the ubuntu instance and test
@@ -422,26 +431,45 @@ wsl -l -v
 #start the ubuntu instance
 wsl -d ubuntu_baseline hostname
 wsl -d ubuntu_baseline hostname -I
+
 #you're still in powershell
 
-#write a /etc/wsl.conf
-10 | % { ($wslconfsh -replace "%%%%%","$_") | set-content \\wsl$\ubuntu_baseline\etc\wsl_conf.sh}
-10 | % { ($wslconf -replace "@@@@@","baseline") | set-content \\wsl$\ubuntu_baseline\etc\wsl.conf}
-wsl -d ubuntu_baseline /usr/bin/chmod 744 /etc/wsl_conf.sh
+#write a /etc/wsl.conf to the target WSL2 VM's disk
+101 | % { ( ($wslconfsh -replace "%%%%%","$_") -replace "`r","")  | set-content \\wsl$\ubuntu_baseline\boot\wsl_conf.sh}
+($wslconf -replace "@@@@@","baseline") | set-content \\wsl$\ubuntu_baseline\etc\wsl.conf
+wsl -d ubuntu_baseline /usr/bin/chmod 744 /boot/wsl_conf.sh
+wsl -d ubuntu_baseline ls -al /boot/wsl_conf.sh
 
-wsl -d ubuntu_baseline ls -al /etc/wsl_conf.sh
+#set the IP
+wsl -d ubuntu_baseline /boot/wsl_conf.sh
 
-#shutdown the VM instance
-wsl -t ubuntu_baseline
-
-sleep 8
-
-#start it up again, verifying the /etc/wsl.conf is respected because the hostname changed
+#check the hostname and IP
 wsl -d ubuntu_baseline hostname
 wsl -d ubuntu_baseline hostname -I
 ```
 
-6. create four ubuntu containers, convert them to be hosted as WSL2 VMs, and create /etc/wsl.conf (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
+6. VERY IMPORTANT POINT: the `[boot]` option in `wsl.conf` is not honored in Windows versions below Windows 11 or Server 2022.
+  * The workaround for this is to set the static IP after the WSL2 VM is up and the host compute network vSwitch is (re)configured:
+  ```
+  wsl -d ubuntu_baseline /boot/wsl_conf.sh
+  ```
+
+7. Every time your machine is rebooted, the vSwitch is re-created off of a base template or some logic that I can't locate or can't be customized.  The active switch config is stored in the registry: `HKLM\SYSTEM\CurrentControlSet\Services\VMSMP\Parameters\SwitchList`, but this is not related to 
+* `HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}\`
+* `C:\Windows\INF\wvms_mp_windows.inf`
+* `HKLM\SYSTEM\CurrentControlSet\Services\vmsmp\parameters\SwitchList\991BDC97-F2A5-4B06-8403-4681E29C606D`
+
+
+8. In order to configure delete then create the vSwitch as covered in step 1, you must delete
+
+
+
+
+
+9.  create four ubuntu containers, convert them to be hosted as WSL2 VMs, and create /etc/wsl.conf (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
+
+`wsl -d ubuntu_baseline apt update -y && apt upgrade -y && apt install -y dos2unix`
+
 ```
 $nodes = "control","workernode1","workernode2","workernode3"
 $i=11 #this will be the iterator of the IP address
@@ -449,7 +477,7 @@ $i=11 #this will be the iterator of the IP address
 foreach ($node in $nodes) {
   
   write-host building ubuntu_$node node with WSL host compute network IP ending in $i
-  wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu_baseline.tar.gz
+  wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu\x64\install.tar.gzz
   
   write-host converting ubuntu_$node node to WSL2 VM
   wsl --set-version ubuntu_$node 2
@@ -465,14 +493,13 @@ foreach ($node in $nodes) {
   write-host "new host info: $(wsl -d ubuntu_$node hostname) at $(wsl -d ubuntu_$node hostname -I)"
   $i++
 }
-```
-
-
-   
-power up ubuntu target instance
+#power up ubuntu target instance
 10..15 | % { $wslconf -replace "%%%%%","$_" }
 
+```
 
+* additional items:
+```
 # maintain a /etc/host file, which you can do from windows 
 
 
@@ -493,8 +520,11 @@ wsl -d ubuntu_control
 
 #note that you can configure RAM, CPU, etc: https://learn.microsoft.com/en-us/windows/wsl/wsl-config
 ```
+
+* back to the video course
 * interface with each WSL2 VM and install the kube stuff
 ```
+apt update
 sudo apt install -y containerd
 curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
 echo deb https://api.kubernetes.io kubernetes-xenial main > /etc/apt/sources.list.d/kubernetes.list
@@ -504,10 +534,25 @@ apt-mark hold kubelet kubeadm kubectl containerd
 ```
 
 
+
 ### Lab Environment Overview
 * one control plane node, and three worker nodes
+  * `kubectl` on control plane node
+  * ubuntu version 18.04 (we won't be using this)
+  * remember to disable swap
+  * add `/etc/hosts` entries
 
 ### Demo: Installing and Configuring containerd
+
+* goals:
+  * install the following
+    * containerd
+    * kubelet
+    * kubeadm
+    * kubectl
+  * review how `systemd` manages these
+   
+
 ### Demo: Installing and Configuring Kubernetes Packages
 ### Bootstrapping a Cluster with kubeadm
 ### Understanding the Certificate Authority's Role in Your Cluster
