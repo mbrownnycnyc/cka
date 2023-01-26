@@ -307,7 +307,6 @@
 1. build a reasonable host compute network on your host
 
 ```
-wsl --shutdown
 # use this: https://github.com/skorhone/wsl2-custom-network
 cd $repo\
 git clone https://github.com/skorhone/wsl2-custom-network.git
@@ -351,6 +350,7 @@ $network = @"
 "@
 
 Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | Remove-HnsNetworkEx
+wsl --shutdown
 New-HnsNetworkEx -Id B95D0C5E-57D4-412B-B571-18A81A16E005 -JsonString $network
 Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | convertto-json -depth 100 | set-content c:\users\public\wsl_hcn.json
 ```
@@ -440,7 +440,7 @@ wsl -d ubuntu_baseline hostname -I
 wsl -d ubuntu_baseline /usr/bin/chmod 744 /boot/wsl_conf.sh
 wsl -d ubuntu_baseline ls -al /boot/wsl_conf.sh
 
-#set the IP
+#set the IP, without this it appears all VMs get the same IP, as this is functionality of ICS.
 wsl -d ubuntu_baseline /boot/wsl_conf.sh
 
 #check the hostname and IP
