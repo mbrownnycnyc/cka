@@ -302,6 +302,10 @@
 ### Installing Kubernetes on VMs
 * I'll be using WSL2 because I like making things difficult.
 * This is split into two different sections, steps 1-8 are initial configuration steps and then step 9-10 will be for on-demand lab spin up.
+* with reference to: https://github.com/ocroz/wsl2-boot or https://stevegy.medium.com/wsl-2-static-ip-341603d84401
+
+* CURRENTLY there's a problem where each VM is assigned the same IP address... the last configured with `ip`.  I'm going to look at https://github.com/wikiped/WSL-IpHandler to see if this will help, it is called out in the purpose statement: "All running WSL Instances have the same random IP address within WSL SubNet although default SubNet prefix length for some reason is 16 (which is enough for 65538 ip addresses!)."
+
 
 
 1. build a reasonable host compute network on your host
@@ -315,6 +319,7 @@ import-module -Name .\hcn
 
 #mind the indents when dealing with the here string
 #https://learn.microsoft.com/en-us/windows-server/networking/technologies/hcn/hcn-json-document-schemas
+#the only type supported in Windows 10 is ICS
 $network = @"
 {
         "Name" : "WSL",
@@ -349,9 +354,14 @@ $network = @"
 }
 "@
 
-Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | Remove-HnsNetworkEx
 wsl --shutdown
+Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | Remove-HnsNetworkEx
+#try this, note the reliance on ICS might cause weirdness with assigning static addresses to multiple VMs on the vSwitch
 New-HnsNetworkEx -Id B95D0C5E-57D4-412B-B571-18A81A16E005 -JsonString $network
+#alternately try:
+
+#this refers to https://github.com/ocroz/wsl2-boot/blob/master/windows/HnsEx.ps1
+#  New-HnsNetwork -Name "WSL" -AddressPrefix "192.168.143.0/24" -GatewayAddress "192.168.143.1"
 Get-HnsNetworkEx | Where-Object { $_.Name -Eq "WSL" } | convertto-json -depth 100 | set-content c:\users\public\wsl_hcn.json
 ```
 
@@ -454,21 +464,16 @@ wsl -d ubuntu_baseline hostname -I
   wsl -d ubuntu_baseline /boot/wsl_conf.sh
   ```
 
-7. Every time your machine is rebooted, the vSwitch is re-created off of a base template or some logic that I can't locate or can't be customized.  The active switch config is stored in the registry: `HKLM\SYSTEM\CurrentControlSet\Services\VMSMP\Parameters\SwitchList`, but this is not related to 
-* `HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}\`
-* `C:\Windows\INF\wvms_mp_windows.inf`
-* `HKLM\SYSTEM\CurrentControlSet\Services\vmsmp\parameters\SwitchList\991BDC97-F2A5-4B06-8403-4681E29C606D`
+7. Every time your machine is rebooted, the vSwitch is re-created off of a base template or some logic that I can't locate or can't be customized.
 
+8. In order to configure delete then create the vSwitch as covered in step 1, I've tried a few ways to create a powershell script that invokes HCN vswitch deletion/recreation, but it always fails to start... I've set it to run with highest privs and as the user.  To maintain security of the script file, I've leveraged EFS (local NTFS encryption) to encrypt against the user.  The issue seems separate and may be caused by the NGAV/EDR/EPP I have on my system.
 
-8. In order to configure delete then create the vSwitch as covered in step 1, you must delete
+So... in this case, you need to re-run a powershell script with admin privs, to create the vSwitch and issue the commands eery time Windows starts.
 
-
-
+The main problem I seem to be having is that I can't assign different IPs to different VMs.  Let's see if I can get through this.
 
 
 9.  create four ubuntu containers, convert them to be hosted as WSL2 VMs, and create /etc/wsl.conf (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
-
-`wsl -d ubuntu_baseline apt update -y && apt upgrade -y && apt install -y dos2unix`
 
 ```
 $nodes = "control","workernode1","workernode2","workernode3"
@@ -477,46 +482,36 @@ $i=11 #this will be the iterator of the IP address
 foreach ($node in $nodes) {
   
   write-host building ubuntu_$node node with WSL host compute network IP ending in $i
-  wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu\x64\install.tar.gzz
+  wsl --import ubuntu_$node $env:userprofile\wsl2\ubuntu_$node $env:userprofile\wsl2\ubuntu\x64\install.tar.gz
   
   write-host converting ubuntu_$node node to WSL2 VM
   wsl --set-version ubuntu_$node 2
   write-host "old host info: $(wsl -d ubuntu_$node hostname) at $(wsl -d ubuntu_$node hostname -I)"
  
   sleep 3
-  $i | % { ($wslconfsh -replace "%%%%%","$_") -replace "@@@@@",$node | set-content \\wsl$\ubuntu_$node\etc\wsl_conf.sh}
+  $i | % { ($wslconfsh -replace "%%%%%","$_") -replace "@@@@@",$node | set-content \\wsl$\ubuntu_$node\boot\wsl_conf.sh}
   $i | % { ($wslconf -replace "@@@@@",$node) | set-content \\wsl$\ubuntu_$node\etc\wsl.conf}
-  wsl -d ubuntu_$node /usr/bin/chmod 744 /etc/wsl_conf.sh
+  wsl -d ubuntu_$node /usr/bin/chmod 744 /boot/wsl_conf.sh
+  wsl -d ubuntu_$node /boot/wsl_conf.sh
+  sleep 3
 
   wsl -t ubuntu_$node
   sleep 3
   write-host "new host info: $(wsl -d ubuntu_$node hostname) at $(wsl -d ubuntu_$node hostname -I)"
   $i++
 }
-#power up ubuntu target instance
-10..15 | % { $wslconf -replace "%%%%%","$_" }
 
 ```
+
+
+
 
 * additional items:
 ```
+# update upgrade
+wsl -d ubuntu_baseline apt update -y && apt upgrade -y
+
 # maintain a /etc/host file, which you can do from windows 
-
-
-
-
-#create four VMs that will be nodes
-
-
-wsl -l -v
-
-#access each node by using the `--distribution` switch
-wsl -d ubuntu_control
-
-# go through each instance, run `apt update && apt upgrade`
-
-# maybe I need to do this: https://github.com/ocroz/wsl2-boot or https://stevegy.medium.com/wsl-2-static-ip-341603d84401
-
 
 #note that you can configure RAM, CPU, etc: https://learn.microsoft.com/en-us/windows/wsl/wsl-config
 ```
