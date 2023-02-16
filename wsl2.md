@@ -1,4 +1,299 @@
-* remember to run `wsl --update`
+* remember to run `wsl --update` to update the kernel on the VM distro.
+
+* wait, so let me backup...
+  * I always thought WSL2 was actually a VM host.  It is, but it also generates a single VM per distro, and by distro I mean "ubuntu".
+  * So you get a single ubuntu VM, with various things shared between... each container!
+  * Each container (what MSFT seems to like to call "lightweight linux utility VM") has several things unique to that container itself.
+  * One of those things is network namespaces.  https://github.com/microsoft/WSL/issues/4304#issuecomment-511884889
+* So, this is why every time I change the IP of "my WSL2 VM instance" it changes... well... the IP of my WSL2 VM instance... NOT THE CONTAINER.
+  * For lack of knowledge, I'm going to just say that the networking structure of the containers is transparent, and the vSwitch interface "eth0" on the containers, has an IP bound.  You can actively change this IP given MANY solutions:
+    * https://github.com/wikiped/WSL-IpHandler <-- simple to use and easy to understand
+    * https://github.com/ocroz/wsl2-boot <-- complex to use and hard to understand
+    * https://github.com/skorhone/wsl2-custom-network <-- okay, but incomplete (I think?)
+* What I really want to do is build a k8s cluster of "VMs" on WSL2 so I can progress my training [and, NO... at this point I'm going down the ship... no other hypervisor for me until I tackle _this_ challenge... why?  so I can understand linux features and containers better... is this not _really_ the goal anyway?]
+  * Now I can do this by "tricking" WSL2 to host multiple VMs... which I'm certainly not sure how to do.
+  * Or I can try to use network namespaces (netns) to create a single network namespace per container.
+    * Here's some guidance on that:
+      * concepts: https://blogs.igalia.com/dpino/2016/04/10/network-namespaces/
+      * concepts and implementation: https://superuser.com/a/1715457/91174
+        * or https://gist.github.com/mbrownnycnyc/145dacb59a0cb73ebebd8bc1ff5d5033
+    * In this, I have two obvious requirements:
+      * Attach an IP address to each WSL2 **container** that allows it to be accessible to:
+        * other **containers** running within the WSL2 VM distro (aka on the same vSwitch).
+        * The host OS networking stack via the "WSL" vSwitch.
+* okay, LET'S GOOOOOO
+
+
+1. instantiate a new ubuntu distro based ~~lightweight linux utility VM~~ WSL2 VM hosted container.
+```
+# reference: https://github.com/kaisalmen/wsltooling/blob/main/installUbuntuLTS.ps1
+# distros are available: https://learn.microsoft.com/en-us/windows/wsl/install-manual
+mkdir -p $env:userprofile\wsl2\ubuntu\x64
+#Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
+#or get azcopy https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azcopy-v10#download-azcopy
+azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle $env:userprofile\wsl2\ubuntu.appx
+
+expand-archive $env:userprofile\wsl2\ubuntu.appx $env:userprofile\wsl2\ubuntu
+expand-archive $env:userprofile\wsl2\ubuntu\Ubuntu*_x64.appx $env:userprofile\wsl2\ubuntu\x64
+
+#update to the latest kernel
+wsl --update
+
+wsl --import ubuntu_baseline $env:userprofile\wsl2 $env:userprofile\wsl2\ubuntu\x64\install.tar.gz
+wsl --set-version ubuntu_baseline 2
+#open docker desktop and enable ubuntu via settings>resources> WSL integration (if you don't see Ubuntu listed, you may need to restart docker desktop)
+
+
+```
+
+2. now we have a container accessible via `wsl -d ubuntu_baseline`, so let's build a net network namespace
+```
+wsl -d ubuntu_baseline
+
+# Create veth link.
+ip link add v-eth1 type veth peer name v-peer1
+
+# set the IP of the virtual interface that will provide 0/0 route (we will use 10.200.1.0/24)
+ip addr add 10.200.1.1/24 dev v-eth1
+ip link set v-eth1 up
+
+
+#list the namespaces (there aren't any)
+ip netns
+
+#create a namespace
+ip netns add netns1
+
+# Add peer-1 to NS.
+ip link set v-peer1 netns netns1
+
+#set the IP of the "local" interface (for this WSL2 container)
+ip netns exec netns1 ip addr add 10.200.1.2/24 dev v-peer1
+ip netns exec netns1 ip link set v-peer1 up
+
+# add a loopback and bring it up
+ip netns exec netns1 ip link set dev lo up
+ip netns exec netns1 ip link set lo up
+
+# add a gateway of last resort into the routing table to exit via the virtual ethernet
+ip netns exec netns1 ip route add default via 10.200.1.1
+
+
+#Share internet access between host and NS.
+# Enable IP-forwarding.
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Flush forward rules, policy DROP by default.
+iptables -P FORWARD DROP
+iptables -F FORWARD
+
+# Flush nat rules.
+iptables -t nat -F
+
+# Enable masquerading of 10.200.1.0 (aka NATing)
+iptables -t nat -A POSTROUTING -s 10.200.1.0/255.255.255.0 -o eth0 -j MASQUERADE
+
+# Allow forwarding between eth0 and v-eth1.
+iptables -A FORWARD -i eth0 -o v-eth1 -j ACCEPT
+iptables -A FORWARD -o eth0 -i v-eth1 -j ACCEPT
+
+
+#verify you can ping an outside IP from network namespace netns1
+ip netns exec netns1 ping 8.8.8.8
+
+#verify the routing table within netns1
+ip netns exec netns1 ip route sh
+
+```
+
+3. route traffic destined for 10.200.1.0/24 to the WSL vSwitch interface:
+```
+#must be run as elevated
+$targetip = (get-netipaddress | ? {$_.interfacealias -like "*WSL*" -and $_.addressfamily -like "ipv4"}).ipaddress
+New-NetRoute -DestinationPrefix "10.200.1.0/24" -interfacealias "vEthernet (WSL)" -NextHop 10.200.1.1
+```
+
+4. the IP addressing will not stay persistent through WSL2 VM reboots
+
+5. Build another WSL2 container and take a look at the namespace:
+
+```
+
+$node = "ubuntu_workernode1"
+wsl --import $node $env:userprofile\wsl2\$node $env:userprofile\wsl2\ubuntu\x64\install.tar.gz
+wsl --set-version $node 2
+wsl -d $node ip netns
+```
+
+
+
+
+# initial setup
+
+1. download the ubuntu distro ~~lightweight linux utility VM~~ WSL2 VM hosted container.
+```
+# reference: https://github.com/kaisalmen/wsltooling/blob/main/installUbuntuLTS.ps1
+# distros are available: https://learn.microsoft.com/en-us/windows/wsl/install-manual
+mkdir -p $env:userprofile\wsl2\ubuntu\x64
+#Invoke-WebRequest -Uri https://aka.ms/wslubuntu -OutFile ubuntu.appx -UseBasicParsing
+#or get azcopy https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azcopy-v10#download-azcopy
+azcopy copy https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2204-221101.AppxBundle $env:userprofile\wsl2\ubuntu.appx
+
+expand-archive $env:userprofile\wsl2\ubuntu.appx $env:userprofile\wsl2\ubuntu
+expand-archive $env:userprofile\wsl2\ubuntu\Ubuntu*_x64.appx $env:userprofile\wsl2\ubuntu\x64
+
+#update to the latest kernel
+wsl --update
+```
+
+2. create a wsl.conf file for each of the target containers:
+```
+# refer to the following for more info: https://docs.microsoft.com/en-us/windows/wsl/wsl-config#wsl-2-settings
+$wslconf = @'
+[automount]
+enabled = true
+root = /mnt/
+options = 'metadata,umask=22,fmask=11'
+mountFsTab = true
+
+[network]
+hostname = @@@@@
+generateHosts = true
+generateResolvConf = true
+
+[interop]
+enabled = true
+appendWindowsPath = false
+
+[user]
+#default = ubuntu
+
+
+# "The Boot setting is only available on Windows 11 and Server 2022." - https://learn.microsoft.com/en-us/windows/wsl/wsl-config#boot-settings
+[boot]
+command = /usr/bin/bash /boot/netns_conf.sh
+
+'@
+```
+
+3. create a netns_conf.sh file that we can execute on target containers every time the WSL2 container host VM restarts:
+
+```
+$netshconfsh = @'
+#!/usr/bin/env bash
+# Create veth link.
+ip link add v-eth1 type veth peer name v-peer1
+
+# set the IP of the virtual interface that will provide 0/0 route (we will use 10.200.1.0/24)
+ip addr add 10.200.1.1/24 dev v-eth1
+ip link set v-eth1 up
+
+
+#create a namespace
+ip netns add netns1
+
+# Add peer-1 to NS.
+ip link set v-peer1 netns netns1
+
+#set the IP of the "local" interface (for this WSL2 container)
+ip netns exec netns1 ip addr add 10.200.1.%%%%%/24 dev v-peer1
+ip netns exec netns1 ip link set v-peer1 up
+
+# add a loopback and bring it up
+ip netns exec netns1 ip link set dev lo up
+ip netns exec netns1 ip link set lo up
+
+# add a gateway of last resort into the routing table to exit via the virtual ethernet
+ip netns exec netns1 ip route add default via 10.200.1.1
+
+
+#Share internet access between host and NS.
+# Enable IP-forwarding.
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Flush forward rules, policy DROP by default.
+iptables -P FORWARD DROP
+iptables -F FORWARD
+
+# Flush nat rules.
+iptables -t nat -F
+
+# Enable masquerading of 10.200.1.0 (aka NATing)
+iptables -t nat -A POSTROUTING -s 10.200.1.0/255.255.255.0 -o eth0 -j MASQUERADE
+
+# Allow forwarding between eth0 and v-eth1.
+iptables -A FORWARD -i eth0 -o v-eth1 -j ACCEPT
+iptables -A FORWARD -o eth0 -i v-eth1 -j ACCEPT
+
+
+'@
+```
+
+4. container builds: (must be run within user for which you'll be accessing the WSL2 VM hosted containers)
+```
+#ref: https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/
+$nodes = "ubuntu_control" ,"ubuntu_workernode1","ubuntu_workernode2","ubuntu_workernode3"
+$i=111 #this will be the iterator of the IP address
+
+foreach ($node in $nodes) {
+  
+  write-host building $node node with WSL2 netns IP ending in $i
+  wsl --import $node $env:userprofile\wsl2\$node $env:userprofile\wsl2\ubuntu\x64\install.tar.gz
+  
+  write-host converting $node container to WSL2 VM hosted container
+  wsl --set-version $node 2
+  sleep 3
+  $i | % { ($netshconfsh -replace "%%%%%","$_") | set-content \\wsl$\$node\boot\netns_conf.sh}
+  $i | % { ($wslconf -replace "@@@@@",$node) | set-content \\wsl$\$node\etc\wsl.conf}
+  wsl -d $node /usr/bin/chmod 744 /boot/netns_conf.sh
+  #wsl -d $node /boot/netns_conf.sh
+  sleep 3
+  $i++
+}
+```
+
+5. add a static route to the Windows VM host routing table:  Since our focus is just providing network access to the containers hosted on the WSL2 VM, we don't care if the WSL2 VM has a static IP, so all of the complexity in managing that challenge is removed:
+```
+#this must be executed from an elevated prompt
+#this will survive reboots of WSL2 container host VM as well as your Windows host system:
+New-NetRoute -DestinationPrefix "10.200.1.0/24" -interfacealias "vEthernet (WSL)" -NextHop 10.200.1.1
+```
+
+6. add entries to hosts file on Windows host: (must be executed elavated)
+
+```
+$nodes = "ubuntu_control" ,"ubuntu_workernode1","ubuntu_workernode2","ubuntu_workernode3"
+$i=111
+foreach ($node in $nodes) {
+  $i | % { "10.200.1.$i $($node).local" | add-content C:\Windows\System32\drivers\etc\hosts}
+  $i++
+}
+```
+
+
+7. from the windows host, check routes:
+
+```
+$nodes = "ubuntu_control" ,"ubuntu_workernode1","ubuntu_workernode2","ubuntu_workernode3"
+foreach ($node in $nodes) {
+  
+  fastping $node
+}
+
+```
+   
+8. upon reboot of WSL2 VM (after a `wsl --shutdown` or Windows host system reboot), you must perform the following:
+
+```
+$nodes = "ubuntu_control" ,"ubuntu_workernode1","ubuntu_workernode2","ubuntu_workernode3"
+wsl -d $node /boot/netns_conf.sh
+```
+
+
+
+
+
+
 
 * I'll be using WSL2 because I like making things difficult.
 * This is split into two different sections, steps 1-8 are initial configuration steps and then step 9-10 will be for on-demand lab spin up.
@@ -252,6 +547,7 @@ The main problem I seem to be having is that I can't assign different IPs to dif
 9.  create four ubuntu containers, convert them to be hosted as WSL2 VMs, and create /etc/wsl.conf (https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/)
 
 ```
+#ref: https://www.mourtada.se/installing-multiple-instances-of-ubuntu-in-wsl2/
 $nodes = "control" #,"workernode1","workernode2","workernode3"
 $i=11 #this will be the iterator of the IP address
 
