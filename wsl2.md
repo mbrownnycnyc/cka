@@ -22,7 +22,7 @@
         * other **containers** running within the WSL2 VM distro (aka on the same vSwitch).
         * The host OS networking stack via the "WSL" vSwitch.
 * okay, LET'S GOOOOOO
-
+* investigate: https://github.com/rootless-containers/slirp4netns
 
 1. instantiate a new ubuntu distro based ~~lightweight linux utility VM~~ WSL2 VM hosted container.
 ```
@@ -109,7 +109,6 @@ ip netns exec netns1 ip route sh
 3. route traffic destined for 10.200.1.0/24 to the WSL vSwitch interface:
 ```
 #must be run as elevated
-$targetip = (get-netipaddress | ? {$_.interfacealias -like "*WSL*" -and $_.addressfamily -like "ipv4"}).ipaddress
 New-NetRoute -DestinationPrefix "10.200.1.0/24" -interfacealias "vEthernet (WSL)" -NextHop 10.200.1.1
 ```
 
@@ -119,16 +118,14 @@ New-NetRoute -DestinationPrefix "10.200.1.0/24" -interfacealias "vEthernet (WSL)
 
 ```
 
-$node = "ubuntu_workernode1"
-wsl --import $node $env:userprofile\wsl2\$node $env:userprofile\wsl2\ubuntu\x64\install.tar.gz
-wsl --set-version $node 2
-wsl -d $node ip netns
 ```
 
 
 
 
 # initial setup
+
+https://askubuntu.com/questions/1435938/is-it-possible-to-run-a-wsl-app-in-the-background
 
 1. download the ubuntu distro ~~lightweight linux utility VM~~ WSL2 VM hosted container.
 ```
@@ -181,13 +178,15 @@ command = /usr/bin/bash /boot/netns_conf.sh
 ```
 $netshconfsh = @'
 #!/usr/bin/env bash
-# Create veth link.
-ip link add v-eth1 type veth peer name v-peer1
 
-# set the IP of the virtual interface that will provide 0/0 route (we will use 10.200.1.0/24)
-ip addr add 10.200.1.1/24 dev v-eth1
-ip link set v-eth1 up
+if [ ! -d /sys/class/net/v-eth1 ]; then
+  # Create veth link.
+  ip link add v-eth1 type veth peer name v-peer1
 
+  # set the IP of the virtual interface that will provide 0/0 route (we will use 10.200.1.0/24)
+  ip addr add 10.200.1.1/24 dev v-eth1
+  ip link set v-eth1 up
+fi
 
 #create a namespace
 ip netns add netns1
@@ -225,6 +224,8 @@ iptables -t nat -A POSTROUTING -s 10.200.1.0/255.255.255.0 -o eth0 -j MASQUERADE
 iptables -A FORWARD -i eth0 -o v-eth1 -j ACCEPT
 iptables -A FORWARD -o eth0 -i v-eth1 -j ACCEPT
 
+#create an listener which stops the container from shutting down (https://askubuntu.com/a/1436045/514844)
+ip netns exec netns1 nohup nc -l 127.0.0.1 8000 &
 
 '@
 ```
@@ -243,23 +244,43 @@ foreach ($node in $nodes) {
   write-host converting $node container to WSL2 VM hosted container
   wsl --set-version $node 2
   sleep 3
-  $i | % { ($netshconfsh -replace "%%%%%","$_") | set-content \\wsl$\$node\boot\netns_conf.sh}
   $i | % { ($wslconf -replace "@@@@@",$node) | set-content \\wsl$\$node\etc\wsl.conf}
+  wsl -t $node
+  sleep 3
+  wsl -d $node hostname
+  $i | % { ($netshconfsh -replace "%%%%%","$_") | set-content \\wsl$\$node\boot\netns_conf.sh}
   wsl -d $node /usr/bin/chmod 744 /boot/netns_conf.sh
-  #wsl -d $node /boot/netns_conf.sh
   sleep 3
   $i++
 }
 ```
 
-5. add a static route to the Windows VM host routing table:  Since our focus is just providing network access to the containers hosted on the WSL2 VM, we don't care if the WSL2 VM has a static IP, so all of the complexity in managing that challenge is removed:
+* Given the following, I think I need to build all containers, power them all on, and then instantiate the `veth`:
+```
+root@ubuntu_control:/mnt/c/Users/MBrown# ip -o link show | grep v-eth
+14: v-eth1@if13: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\    link/ether 2e:08:fa:f2:73:48 brd ff:ff:ff:ff:ff:ff link-netns netns1
+root@ubuntu_control:/mnt/c/Users/MBrown# ip netns
+netns1 (id: 0)
+
+#notice the netns id (and the presence of `link-netnsid 0`... there is no associated netns to the veth... the peer interface exists but isn't accessible, so you recieve an error when invoking `ip link set v-peer1 netns netns1` 'Cannot find device "v-peer1"')
+root@ubuntu_workernode1:/mnt/c/Users/MBrown# ip -o link | grep v-eth
+14: v-eth1@if13: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\    link/ether 2e:08:fa:f2:73:48 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+root@ubuntu_workernode1:/mnt/c/Users/MBrown# ip netns
+netns1
+```
+* Should loop after the containers are all up:
+```
+wsl -d $node /boot/netns_conf.sh
+```
+
+1. add a static route to the Windows VM host routing table:  Since our focus is just providing network access to the containers hosted on the WSL2 VM, we don't care if the WSL2 VM has a static IP, so all of the complexity in managing that challenge is removed:
 ```
 #this must be executed from an elevated prompt
 #this will survive reboots of WSL2 container host VM as well as your Windows host system:
 New-NetRoute -DestinationPrefix "10.200.1.0/24" -interfacealias "vEthernet (WSL)" -NextHop 10.200.1.1
 ```
 
-6. add entries to hosts file on Windows host: (must be executed elavated)
+1. add entries to hosts file on Windows host: (must be executed elavated)
 
 ```
 $nodes = "ubuntu_control" ,"ubuntu_workernode1","ubuntu_workernode2","ubuntu_workernode3"

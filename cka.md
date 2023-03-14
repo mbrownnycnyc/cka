@@ -300,10 +300,12 @@
 * 
 
 ### Installing Kubernetes on VMs
-* refer to wsl2.md in this repo for some work
+* refer to wsl2.md in this repo for some work I did in that area, however I need to move on now... so I'm goign to use vmware player and 
+
+$nodes = "ubuntu_control" ,"ubuntu_workernode1","ubuntu_workernode2","ubuntu_workernode3"
 
 * back to the video course
-* interface with each WSL2 VM and install the kube stuff
+* interface with each VM and install the kube stuff
 ```
 apt update
 sudo apt install -y containerd
