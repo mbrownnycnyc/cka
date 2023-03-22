@@ -300,17 +300,37 @@
 * 
 
 ### Installing Kubernetes on VMs
-* refer to wsl2.md in this repo for some work I did in that area, however I need to move on now... so I'm goign to use vmware player and 
+* refer to wsl2.md in this repo for some work I did in that area, however I need to move on now... so I'm going to use vmware player and build four VMs.
+* "ubuntucontrol" = 192.168.207.10,"ubuntuworkernode1" = 192.168.207.11,"ubuntuworkernode2" = 192.168.207.12,"ubuntuworkernode3" = 192.168.207.13
+  * Onboard as NAT networking type
+  * update local Windows host at `C:\windows\system32\drivers\etc\hosts` for all nodes' IPs
+* after ubuntu 22.02 install, configure as follows:
+  * set each to a static IP within the vmware player established vswitch subnet by creating a netplan config at `/etc/netplan/99_config.yaml`, `sudo netplan try --state /etc/netplan/`, then `sudo netplan apply`
+    ```
+    #it's a yaml, so indents matter
+    network:
+      version: 2
+      renderer: networkd
+      ethernets:
+        ens33:
+          addresses:
+            - 192.168.207.10/24
+          routes:
+            - to: default
+              via: 192.168.207.2
+          nameservers:
+              search: [localdomain]
+              addresses: [192.168.207.2]
+    ```
+  * 
 
-$nodes = "ubuntu_control" ,"ubuntu_workernode1","ubuntu_workernode2","ubuntu_workernode3"
-
-* back to the video course
 * interface with each VM and install the kube stuff
 ```
 apt update
 sudo apt install -y containerd
 curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-echo deb https://api.kubernetes.io kubernetes-xenial main > /etc/apt/sources.list.d/kubernetes.list
+echo -n deb https://api.kubernetes.io kubernetes-xenial main > /etc/apt/sources.list.d/kubernetes.list
+apt update
 apt install -y kubelet kubeadm kubectl
 #disable upgrading of these packages by apt so that you can control what versions you're using:
 apt-mark hold kubelet kubeadm kubectl containerd
@@ -319,11 +339,14 @@ apt-mark hold kubelet kubeadm kubectl containerd
 
 
 ### Lab Environment Overview
+
+![](2023-03-20-15-13-46.png)
+
 * one control plane node, and three worker nodes
   * `kubectl` on control plane node
-  * ubuntu version 18.04 (we won't be using this)
+  * ubuntu version 22.04
   * remember to disable swap
-  * add `/etc/hosts` entries
+  * add `/etc/hosts` entries for each node
 
 ### Demo: Installing and Configuring containerd
 
