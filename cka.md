@@ -1,4 +1,4 @@
-* https://app.pluralsight.com/course-player?clipId=e73685d0-189c-4207-88fd-f9550289a695
+* https://app.pluralsight.com/course-player?clipId=18a74fb8-708b-4c8f-964b-41758e7245cb
 
 # Kubernetes installatina nd configuration fundamentals
 
@@ -324,18 +324,6 @@
     ```
   * 
 
-* interface with each VM and install the kube stuff
-```
-apt update
-sudo apt install -y containerd
-curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-echo -n deb https://api.kubernetes.io kubernetes-xenial main > /etc/apt/sources.list.d/kubernetes.list
-apt update
-apt install -y kubelet kubeadm kubectl
-#disable upgrading of these packages by apt so that you can control what versions you're using:
-apt-mark hold kubelet kubeadm kubectl containerd
-```
-
 
 
 ### Lab Environment Overview
@@ -348,6 +336,8 @@ apt-mark hold kubelet kubeadm kubectl containerd
   * remember to disable swap
   * add `/etc/hosts` entries for each node
 
+
+
 ### Demo: Installing and Configuring containerd
 
 * goals:
@@ -358,17 +348,225 @@ apt-mark hold kubelet kubeadm kubectl containerd
     * kubectl
   * review how `systemd` manages these
    
+* interface with each VM, decrease swappiness, then install containerd
+```
+#https://askubuntu.com/a/103871
+cat /proc/sys/vm/swappiness #should read 60, meaning if RAM is 60% utilized that the UMM will swap memory to disk
+sudo vim /etc/sysctl.conf
+# add to end of file vm.swappiness = 10
+sudo sysctl --system #reload sysctl.conf
+cat /proc/sys/vm/swappiness
+
+
+#containerd prereqs
+cat <<EOI | sudo tee /etc/modules-load.d/containerd.conf
+overlay
+br_netfilter
+EOI
+# affect at runtime
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+#k8s prereqs
+cat <<EOI | sudo tee /etc/sysctl.d/00-kubernetes-cri.conf
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOI
+# affect at runtime
+sudo sysctl --system
+
+
+sudo apt update -y
+
+#install and configure containerd
+sudo apt install -y containerd
+sudo mkdir -p /etc/containerd
+sudo containerd config default | sudo tee /etc/containerd/config.toml
+#set the cgroup driver to systemd in /etc/containerd/config.toml
+$below `[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]` find and change the following value:
+SystemdCgroup = true
+sudo systemctl restart containerd
+```
 
 ### Demo: Installing and Configuring Kubernetes Packages
-### Bootstrapping a Cluster with kubeadm
+
+* install kubernetes packages
+
+```
+# install kubernetes
+# https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+sudo bash -c 'cat <<EOI > /etc/apt/sources.list.d/kubernetes.list
+deb https://apt.kubernetes.io kubernetes-xenial main
+EOI'
+
+sudo apt update
+#list versions
+apt-cache policy kubelet | head -n 20
+
+#pin to a specific version during install
+VERSION=1.20.1-00
+sudo apt install -y kubelet=$VERSION kubeadm=$VERSION kubectl=$VERSION
+
+#disable upgrading of these packages by apt so that you can control what versions you're using:
+sudo apt-mark hold kubelet kubeadm kubectl containerd
+```
+
+* review kubelet systemd unit status, note that it will fail to start because there's no cluster config (see next section)
+```
+sudo systemctl status kubelet.service
+● kubelet.service - kubelet: The Kubernetes Node Agent
+     Loaded: loaded (/lib/systemd/system/kubelet.service; enabled; vendor preset: enabled)
+    Drop-In: /etc/systemd/system/kubelet.service.d
+             └─10-kubeadm.conf
+     Active: activating (auto-restart) (Result: exit-code) since Thu 2023-03-30 10:10:22 UTC; 1s ago
+       Docs: https://kubernetes.io/docs/home/
+    Process: 4049 ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS (code=exited, status=255/EXCEPTION)
+   Main PID: 4049 (code=exited, status=255/EXCEPTION)
+        CPU: 100ms
+
+Mar 30 10:10:22 ubuntucontrol systemd[1]: kubelet.service: Main process exited, code=exited, status=255/EXCEPTION
+Mar 30 10:10:22 ubuntucontrol systemd[1]: kubelet.service: Failed with result 'exit-code'.
+```
+
+* review containerd systemd unit status
+```
+sudo systemctl status containerd.service
+```
+
+* set both `kubelet` and `containerd` to start upon system boot
+```
+sudo systemctl enable kubelet.service containerd.service
+```
+
+### Bootstrapping a Cluster with kubeadm (on the control plane node)
+* create a cluster by invoking `kubeadm init`.  This performs the following:
+1. validation occurs
+  * RAM
+  * compatible container runtime check and that it's running
+2. creates a CA (certs are used for encryption and authentication)
+3. generates `kubeconfig` files
+4. generates static pob manifests
+5. wait for the control plane pods to start
+6. taints the control plane node
+  * this will cause the control plane node to never schedule user pods on the control plane node
+7. generates a bootstrap taken
+8. starts add-on components: DNS and kube-proxy
+
 ### Understanding the Certificate Authority's Role in Your Cluster
+* kubeadm init creates a self signed CA
+* you can tell kubeadm to integrate into an external PKI
+* CA is used: /etc/kubernetes/pki
+  * to secure cluster comms throughout cluster
+    * used for API Server comms
+  * to authenticate users and cluster components (nodes, etc)
+* The CA certs are distributed to each node
+
 ### kubeadm Created kubeconfig Files and Static Pod Manifests
+
+#### kubeconfig files
+* a `kubeconfig` file defines how to connect to the cluster
+  * includes:
+    * client certs
+    * CA certs
+    * cluster API server network location
+* `kubeadm` creates various `kubeconfig` files that are used by the control plane node and worker nodes within `/etc/kubernetes`
+  * `admin.conf` (kubernetes-admin): is the admin account/superuser
+  * `kubelet.conf`: used to help kubelet to locate the API server and provide auth cert
+  * `controller-manager.conf`: used to help controller manager to locate the API server and provide auth cert
+  * `scheduler.conf`: : used to help scheduler to locate the API server and provide auth cert
+
+#### static pod manifests
+* manifest describes a config of a pod
+* generated by `kubeadm init`
+  * produces files in `/etc/kubernetes/manifests`
+* core control plan components:
+  * etcd
+  * api server
+  * controller manager
+  * scheduler
+* `kubelet` watches the directory `/etc/kubernetes/manifests` for changes to the config
+
 ### Pod Networking Fundamentals
+
+![](2023-03-30-06-29-30.png)
+
+* overlay network options
+  * Flannel: layer 3 virtual network
+  * Calico: layer 3 and policy based traffic management
+  * Weave Net: multi host network
+
 ### Creating a Cluster Control Plane Node and Adding a Node
+
+#### create a cluster control plane node, admin user, and overlay network
+* download yaml manifest that describes the pod overlay network
+```
+wget https://docs.projectcalico.org/manifests/calico.yaml
+```
+* create a cluster config file
+```
+kubeadm config print init-defaults | tee ClusterConfigurations.yaml
+```
+* init the cluster
+```
+sudo kubeadm init --config=Clusterconfiguration.yaml --cri-socket /run/containerd/containerd.sock
+```
+  * once this command has exited, all control plane pods will be up and running
+  * this command will also output:
+    * commands to have workernodes join the cluster
+    * how to execute kubeadm to create an admin user
+
+##### creating a cluster admin user
+```
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -d) $HOME/.kube/config
+```
+* inside of this kubeconfig file will contain network info on API server as well as certs used for authentication
+
+##### deploy the pod network
+```
+kubectl apply -f calico.yaml
+# this will push the overlay network related pods into the cluster
+```
+
+#### adding a node to a cluster
+1. install packages
+2. `kubeadm join`
+  * takes additional parameters: bootstrap token, CA cert hash, and the location of the API server
+3. downloads cluster info
+4. node submits a CSR to the API server (used for kubelet to auth to API server)
+5. CA signs the CSR automatically
+  * `kubeadm join` downloads the cert and stores in `/var/lib/kubelet/pki`
+6. creates `/etc/kubernetes/kubelet.conf`
+  * contains client auth cert
+  * contains API server info 
+* invocation is: (note that `kubeadm init` you ran earlier produces this command)
+```
+kubeadm join APISERVER:6443 --token [token] --discovery-token-ca-cert-hash sha256:[hash]
+```
+
 ### Demo: Creating a Cluster Control Plane Node
+* create the cluster
+```
+# https://docs.tigera.io/calico/latest/getting-started/kubernetes/self-managed-onprem/onpremises#install-calico-with-kubernetes-api-datastore-50-nodes-or-less
+wget https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+
+#find CALICO_IPV4POOL_CIDR and modify this range to something outside of the ranges used by any infrastructure (in our case there is an overlap)
+vim calico.yaml
+
+#create a kubeconfig file
+kubeadm config print init-defaults | tee ClusterConfiguration.yaml
+vim ClusterConfiguration.yaml
+
+```
+* create a pod network
+* review systemd units
+* static pod manifests
+* join some worker nodes
+
+
 ### Demo: Adding a Node to Your Cluster
 ### Managed Cloud Deployment Scenarios: AKS, EKS, and GKE
 ### Demo: Creating a Cluster in the Cloud with Azure Kubernetes Service
-4. Working with Your Kubernetes Cluster
-
-9
