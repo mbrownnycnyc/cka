@@ -1,6 +1,6 @@
 * https://app.pluralsight.com/course-player?clipId=18a74fb8-708b-4c8f-964b-41758e7245cb
 
-# Kubernetes installatina nd configuration fundamentals
+# Kubernetes installation and configuration fundamentals
 
 ## Course Overview
 
@@ -939,3 +939,411 @@ kubectl config use-context cscluster
 ```
 az aks delete --resource-group "kubernetes-cloud" --name cscluster --yes --no-wait
 ```
+
+## Working with Your Kubernetes Cluster
+
+* introducing and using kubernetes
+* a closer look at `kubectl`
+* demo: using `kubectl`: nodes, pods, api reosurces, bash auto completion
+* app and pod deployment (and working with yaml manifests)
+* demo: imperative deployments (and workign with resources in your cluster)
+* demo: exposing and accessing services in your cluster
+* demo: declaritive deploymentsa and acessing and mofiying existing resources in your cluster
+
+### using `kubectl`
+* primary CLI tool for controlling workloads (how to communicate with the API server)
+  * used for operations (CRUD, etc) (perform an "action", aka verbs)
+  * affect resources (affected object, aka nouns)
+  * returns output (gets metadata)
+
+#### operations:
+* `apply`/`create`: create resources and sending deployments
+* `run`: start a pod from an image (a pod not managed by a controller)
+* `explain`: documentation for resources (shows api objects)
+* `delete`: delete resources
+* `get`: list resources
+* `describe`: detailed resource info (good for tshooting)
+* `exec`: execute a command on a container inside a pod (similar to `docker exec`)
+* `logs`: view logs to stdout from a container running inside a pod
+
+#### resources:
+* `nodes` (`no`)
+* `pods` (`po`)
+* `services` (`svc`)
+* and more
+
+#### output:
+* modidying output
+* specify formats:
+  * `wide`: output additional info
+  * `yaml`: outputs YAML
+  * `json`: outputs JSON
+  * `dry-run`: prints an object without sending it to the API Server.  Good for creating resources.
+
+### a closer look at `kubectl`
+* https://kubernetes.io/docs/reference/kubectl/cheatsheet/
+* `kubectl get pods [pod1] --output=yaml`
+* `kubectl create deployment nginx --image=nginx`
+
+### demo: using kubectl with nodes, pods, and api resources, configure bash auto-completion
+1. get clsuter info
+```
+kubectl cluster-info
+```
+
+2. get the nodes
+```
+kubectl get nodes
+kubectl get nodes -o wide
+kubectl get nodes -o yaml
+```
+
+3. get the pods
+```
+kubectl get pods
+kubectl get pods -A
+
+$ kubectl get pods -A -o wide
+NAMESPACE     NAME                                       READY   STATUS    RESTARTS   AGE     IP               NODE                NOMINATED NODE   READINESS GATES
+kube-system   calico-kube-controllers-5bb7768754-92rf9   1/1     Running   0          4h59m   192.168.246.65   ubuntucontrol       <none>           <none>
+kube-system   calico-node-5x8wq                          0/1     Running   0          3h7m    172.16.94.11     ubuntuworkernode1   <none>           <none>
+kube-system   calico-node-mbdvm                          0/1     Running   0          175m    172.16.94.12     ubuntuworkernode2   <none>           <none>
+kube-system   calico-node-qw5pf                          0/1     Running   0          4h59m   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   calico-node-zn6w6                          0/1     Running   0          171m    172.16.94.13     ubuntuworkernode3   <none>           <none>
+kube-system   coredns-74ff55c5b-qbg9s                    1/1     Running   0          5h41m   192.168.246.67   ubuntucontrol       <none>           <none>
+kube-system   coredns-74ff55c5b-xbtsh                    1/1     Running   0          5h41m   192.168.246.66   ubuntucontrol       <none>           <none>
+kube-system   etcd-ubuntucontrol                         1/1     Running   0          5h41m   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   kube-apiserver-ubuntucontrol               1/1     Running   0          5h41m   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   kube-controller-manager-ubuntucontrol      1/1     Running   0          5h41m   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   kube-proxy-2fkn2                           1/1     Running   0          175m    172.16.94.12     ubuntuworkernode2   <none>           <none>
+kube-system   kube-proxy-gnhpm                           1/1     Running   0          171m    172.16.94.13     ubuntuworkernode3   <none>           <none>
+kube-system   kube-proxy-sqbm5                           1/1     Running   0          5h41m   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   kube-proxy-tkjg8                           1/1     Running   0          3h7m    172.16.94.11     ubuntuworkernode1   <none>           <none>
+kube-system   kube-scheduler-ubuntucontrol               1/1     Running   0          5h41m   172.16.94.10     ubuntucontrol       <none>           <none>
+```
+* note that each node has kube-proxy and for comms with the "real IP" versus the calico SDN IPs.
+
+4. get all info
+```
+$ kubectl get all -A
+NAMESPACE     NAME                                           READY   STATUS    RESTARTS   AGE
+kube-system   pod/calico-kube-controllers-5bb7768754-92rf9   1/1     Running   0          5h8m
+kube-system   pod/calico-node-5x8wq                          0/1     Running   0          3h16m
+kube-system   pod/calico-node-mbdvm                          0/1     Running   0          3h4m
+kube-system   pod/calico-node-qw5pf                          0/1     Running   0          5h8m
+kube-system   pod/calico-node-zn6w6                          0/1     Running   0          179m
+kube-system   pod/coredns-74ff55c5b-qbg9s                    1/1     Running   0          5h50m
+kube-system   pod/coredns-74ff55c5b-xbtsh                    1/1     Running   0          5h50m
+kube-system   pod/etcd-ubuntucontrol                         1/1     Running   0          5h50m
+kube-system   pod/kube-apiserver-ubuntucontrol               1/1     Running   0          5h50m
+kube-system   pod/kube-controller-manager-ubuntucontrol      1/1     Running   0          5h50m
+kube-system   pod/kube-proxy-2fkn2                           1/1     Running   0          3h4m
+kube-system   pod/kube-proxy-gnhpm                           1/1     Running   0          179m
+kube-system   pod/kube-proxy-sqbm5                           1/1     Running   0          5h50m
+kube-system   pod/kube-proxy-tkjg8                           1/1     Running   0          3h16m
+kube-system   pod/kube-scheduler-ubuntucontrol               1/1     Running   0          5h50m
+
+NAMESPACE     NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                  AGE
+default       service/kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP                  5h50m
+kube-system   service/kube-dns     ClusterIP   10.96.0.10   <none>        53/UDP,53/TCP,9153/TCP   5h50m
+
+NAMESPACE     NAME                         DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE
+kube-system   daemonset.apps/calico-node   4         4         0       4            0           kubernetes.io/os=linux   5h8m
+kube-system   daemonset.apps/kube-proxy    4         4         4       4            4           kubernetes.io/os=linux   5h50m
+
+NAMESPACE     NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+kube-system   deployment.apps/calico-kube-controllers   1/1     1            1           5h8m
+kube-system   deployment.apps/coredns                   2/2     2            2           5h50m
+
+NAMESPACE     NAME                                                 DESIRED   CURRENT   READY   AGE
+kube-system   replicaset.apps/calico-kube-controllers-5bb7768754   1         1         1       5h8m
+kube-system   replicaset.apps/coredns-74ff55c5b                    2         2         2       5h50m
+```
+
+5. get all api objects that are available in k8s
+```
+$ kubectl api-resources
+NAME                              SHORTNAMES   APIVERSION                             NAMESPACED   KIND
+bindings                                       v1                                     true         Binding
+componentstatuses                 cs           v1                                     false        ComponentStatus
+configmaps                        cm           v1                                     true         ConfigMap
+endpoints                         ep           v1                                     true         Endpoints
+events                            ev           v1                                     true         Event
+limitranges                       limits       v1                                     true         LimitRange
+namespaces                        ns           v1                                     false        Namespace
+nodes                             no           v1                                     false        Node
+persistentvolumeclaims            pvc          v1                                     true         PersistentVolumeClaim
+persistentvolumes                 pv           v1                                     false        PersistentVolume
+pods                              po           v1                                     true         Pod
+podtemplates                                   v1                                     true         PodTemplate
+replicationcontrollers            rc           v1                                     true         ReplicationController
+resourcequotas                    quota        v1                                     true         ResourceQuota
+secrets                                        v1                                     true         Secret
+serviceaccounts                   sa           v1                                     true         ServiceAccount
+services                          svc          v1                                     true         Service
+mutatingwebhookconfigurations                  admissionregistration.k8s.io/v1        false        MutatingWebhookConfiguration
+validatingwebhookconfigurations                admissionregistration.k8s.io/v1        false        ValidatingWebhookConfiguration
+customresourcedefinitions         crd,crds     apiextensions.k8s.io/v1                false        CustomResourceDefinition
+apiservices                                    apiregistration.k8s.io/v1              false        APIService
+controllerrevisions                            apps/v1                                true         ControllerRevision
+daemonsets                        ds           apps/v1                                true         DaemonSet
+deployments                       deploy       apps/v1                                true         Deployment
+replicasets                       rs           apps/v1                                true         ReplicaSet
+statefulsets                      sts          apps/v1                                true         StatefulSet
+tokenreviews                                   authentication.k8s.io/v1               false        TokenReview
+localsubjectaccessreviews                      authorization.k8s.io/v1                true         LocalSubjectAccessReview
+selfsubjectaccessreviews                       authorization.k8s.io/v1                false        SelfSubjectAccessReview
+selfsubjectrulesreviews                        authorization.k8s.io/v1                false        SelfSubjectRulesReview
+subjectaccessreviews                           authorization.k8s.io/v1                false        SubjectAccessReview
+horizontalpodautoscalers          hpa          autoscaling/v1                         true         HorizontalPodAutoscaler
+cronjobs                          cj           batch/v1beta1                          true         CronJob
+jobs                                           batch/v1                               true         Job
+certificatesigningrequests        csr          certificates.k8s.io/v1                 false        CertificateSigningRequest
+leases                                         coordination.k8s.io/v1                 true         Lease
+bgpconfigurations                              crd.projectcalico.org/v1               false        BGPConfiguration
+bgppeers                                       crd.projectcalico.org/v1               false        BGPPeer
+blockaffinities                                crd.projectcalico.org/v1               false        BlockAffinity
+caliconodestatuses                             crd.projectcalico.org/v1               false        CalicoNodeStatus
+clusterinformations                            crd.projectcalico.org/v1               false        ClusterInformation
+felixconfigurations                            crd.projectcalico.org/v1               false        FelixConfiguration
+globalnetworkpolicies                          crd.projectcalico.org/v1               false        GlobalNetworkPolicy
+globalnetworksets                              crd.projectcalico.org/v1               false        GlobalNetworkSet
+hostendpoints                                  crd.projectcalico.org/v1               false        HostEndpoint
+ipamblocks                                     crd.projectcalico.org/v1               false        IPAMBlock
+ipamconfigs                                    crd.projectcalico.org/v1               false        IPAMConfig
+ipamhandles                                    crd.projectcalico.org/v1               false        IPAMHandle
+ippools                                        crd.projectcalico.org/v1               false        IPPool
+ipreservations                                 crd.projectcalico.org/v1               false        IPReservation
+kubecontrollersconfigurations                  crd.projectcalico.org/v1               false        KubeControllersConfiguration
+networkpolicies                                crd.projectcalico.org/v1               true         NetworkPolicy
+networksets                                    crd.projectcalico.org/v1               true         NetworkSet
+endpointslices                                 discovery.k8s.io/v1beta1               true         EndpointSlice
+events                            ev           events.k8s.io/v1                       true         Event
+ingresses                         ing          extensions/v1beta1                     true         Ingress
+flowschemas                                    flowcontrol.apiserver.k8s.io/v1beta1   false        FlowSchema
+prioritylevelconfigurations                    flowcontrol.apiserver.k8s.io/v1beta1   false        PriorityLevelConfiguration
+ingressclasses                                 networking.k8s.io/v1                   false        IngressClass
+ingresses                         ing          networking.k8s.io/v1                   true         Ingress
+networkpolicies                   netpol       networking.k8s.io/v1                   true         NetworkPolicy
+runtimeclasses                                 node.k8s.io/v1                         false        RuntimeClass
+poddisruptionbudgets              pdb          policy/v1beta1                         true         PodDisruptionBudget
+podsecuritypolicies               psp          policy/v1beta1                         false        PodSecurityPolicy
+clusterrolebindings                            rbac.authorization.k8s.io/v1           false        ClusterRoleBinding
+clusterroles                                   rbac.authorization.k8s.io/v1           false        ClusterRole
+rolebindings                                   rbac.authorization.k8s.io/v1           true         RoleBinding
+roles                                          rbac.authorization.k8s.io/v1           true         Role
+priorityclasses                   pc           scheduling.k8s.io/v1                   false        PriorityClass
+csidrivers                                     storage.k8s.io/v1                      false        CSIDriver
+csinodes                                       storage.k8s.io/v1                      false        CSINode
+storageclasses                    sc           storage.k8s.io/v1                      false        StorageClass
+volumeattachments                              storage.k8s.io/v1                      false        VolumeAttachment
+```
+* "NAMESPACED" is if the resource can be within a namespace
+
+6. learn more about resources (useful while building yamls)
+```
+kubectl explain pod
+kubectl explain pod.spec
+kubectl explain pod.spec.containers
+kubectl explain pod --recursive
+```
+
+7. describe will give you a lot of info on resources
+```
+$ kubectl describe nodes ubuntucontrol
+Name:               ubuntucontrol
+Roles:              control-plane,master
+Labels:             beta.kubernetes.io/arch=amd64
+                    beta.kubernetes.io/os=linux
+                    kubernetes.io/arch=amd64
+                    kubernetes.io/hostname=ubuntucontrol
+                    kubernetes.io/os=linux
+                    node-role.kubernetes.io/control-plane=
+                    node-role.kubernetes.io/master=
+Annotations:        kubeadm.alpha.kubernetes.io/cri-socket: /run/containerd/containerd.sock
+                    node.alpha.kubernetes.io/ttl: 0
+                    projectcalico.org/IPv4Address: 172.16.94.10/24
+                    projectcalico.org/IPv4IPIPTunnelAddr: 192.168.246.64
+                    volumes.kubernetes.io/controller-managed-attach-detach: true
+CreationTimestamp:  Thu, 30 Mar 2023 13:55:53 +0000
+Taints:             node-role.kubernetes.io/master:NoSchedule
+Unschedulable:      false
+Lease:
+  HolderIdentity:  ubuntucontrol
+  AcquireTime:     <unset>
+  RenewTime:       Thu, 30 Mar 2023 19:52:19 +0000
+Conditions:
+  Type                 Status  LastHeartbeatTime                 LastTransitionTime                Reason                       Message
+  ----                 ------  -----------------                 ------------------                ------                       -------
+  NetworkUnavailable   False   Thu, 30 Mar 2023 14:38:38 +0000   Thu, 30 Mar 2023 14:38:38 +0000   CalicoIsUp                   Calico is running on this node
+  MemoryPressure       False   Thu, 30 Mar 2023 19:50:18 +0000   Thu, 30 Mar 2023 13:55:49 +0000   KubeletHasSufficientMemory   kubelet has sufficient memory available
+  DiskPressure         False   Thu, 30 Mar 2023 19:50:18 +0000   Thu, 30 Mar 2023 13:55:49 +0000   KubeletHasNoDiskPressure     kubelet has no disk pressure
+  PIDPressure          False   Thu, 30 Mar 2023 19:50:18 +0000   Thu, 30 Mar 2023 13:55:49 +0000   KubeletHasSufficientPID      kubelet has sufficient PID available
+  Ready                True    Thu, 30 Mar 2023 19:50:18 +0000   Thu, 30 Mar 2023 14:38:25 +0000   KubeletReady                 kubelet is posting ready status. AppArmor enabled
+Addresses:
+  InternalIP:  172.16.94.10
+  Hostname:    ubuntucontrol
+Capacity:
+  cpu:                2
+  ephemeral-storage:  19430032Ki
+  hugepages-1Gi:      0
+  hugepages-2Mi:      0
+  memory:             3983176Ki
+  pods:               110
+Allocatable:
+  cpu:                2
+  ephemeral-storage:  17906717462
+  hugepages-1Gi:      0
+  hugepages-2Mi:      0
+  memory:             3880776Ki
+  pods:               110
+System Info:
+  Machine ID:                 f3ac3a329eba47d4886ec66d88244590
+  System UUID:                26cb4d56-9c4a-3cd7-42e5-4f513cc7df13
+  Boot ID:                    8cf1045f-a9fe-48e2-8b5e-5190450d339d
+  Kernel Version:             5.15.0-69-generic
+  OS Image:                   Ubuntu 22.04.2 LTS
+  Operating System:           linux
+  Architecture:               amd64
+  Container Runtime Version:  containerd://1.6.12
+  Kubelet Version:            v1.20.1
+  Kube-Proxy Version:         v1.20.1
+Non-terminated Pods:          (9 in total)
+  Namespace                   Name                                        CPU Requests  CPU Limits  Memory Requests  Memory Limits  AGE
+  ---------                   ----                                        ------------  ----------  ---------------  -------------  ---
+  kube-system                 calico-kube-controllers-5bb7768754-92rf9    0 (0%)        0 (0%)      0 (0%)           0 (0%)         5h14m
+  kube-system                 calico-node-qw5pf                           250m (12%)    0 (0%)      0 (0%)           0 (0%)         5h14m
+  kube-system                 coredns-74ff55c5b-qbg9s                     100m (5%)     0 (0%)      70Mi (1%)        170Mi (4%)     5h56m
+  kube-system                 coredns-74ff55c5b-xbtsh                     100m (5%)     0 (0%)      70Mi (1%)        170Mi (4%)     5h56m
+  kube-system                 etcd-ubuntucontrol                          100m (5%)     0 (0%)      100Mi (2%)       0 (0%)         5h56m
+  kube-system                 kube-apiserver-ubuntucontrol                250m (12%)    0 (0%)      0 (0%)           0 (0%)         5h56m
+  kube-system                 kube-controller-manager-ubuntucontrol       200m (10%)    0 (0%)      0 (0%)           0 (0%)         5h56m
+  kube-system                 kube-proxy-sqbm5                            0 (0%)        0 (0%)      0 (0%)           0 (0%)         5h56m
+  kube-system                 kube-scheduler-ubuntucontrol                100m (5%)     0 (0%)      0 (0%)           0 (0%)         5h56m
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource           Requests     Limits
+  --------           --------     ------
+  cpu                1100m (55%)  0 (0%)
+  memory             240Mi (6%)   340Mi (8%)
+  ephemeral-storage  100Mi (0%)   0 (0%)
+  hugepages-1Gi      0 (0%)       0 (0%)
+  hugepages-2Mi      0 (0%)       0 (0%)
+Events:              <none>
+```
+
+8. help, which contains examples
+```
+kubectl -h
+kubectl get -h
+kubectl create -h
+```
+
+9. bash completion
+
+```
+sudo apt -y install bash-completion
+echo "source <(kubectl completion bash)" >> ~/.bashrc
+source ~/.bashrc
+```
+
+### application deployment in k8s
+* imperative configuration: generally considered single-stream configuration method
+```
+# creates a pod nginx with image nginx
+kubectl create deployment nginx --image=nginx
+
+#creates a pod for nginx
+kubectl run nginz --image=nginx
+```
+* declaratively: define desired state in code
+  * manifest: these contain descriptions of nodes
+    * can be yaml or json
+```
+#deployment.yaml will contain yaml that defines the resources that should be spun up on the cluster
+kubectl apply -f deployment.yaml
+```
+
+#### basic manifest: deployment
+1. create a minimum/basic manifest yaml
+* remember to use the `kubectl explain` and `dry-run` to work on building manifests
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-world
+template:
+  metadata:
+    labels:
+      app: hello-world
+  spec:
+    containers:
+    - image: gcr.io/google-samples/hello-app:1.0
+      name: hello-app
+```
+  * api resource versions allow for stability any time the manifest is executed, given that API versions are maintained historically.
+  * `apps` is used for deployments
+  * `kind`: defines
+  * `spec/selector` labels match template label metadata
+
+2. deploy this example to the cluster
+```
+kubectl apply -f deployment.yaml
+```
+
+#### generate manifests with `dry-run`
+* you can use `--dry-run=client -o yaml` to produce a yaml manifest for an action at the command line
+  * this will allow you to easily create well-formed yaml from specific invocations
+```
+$ kubectl create deployment hello-world --image=gcr.io/google-samples/hello-app:1.0 --dry-run=client -o yaml > deployment_dryrun.yaml
+
+matt@ubuntucontrol:~$ diff deployment.yaml deployment_dryrun.yaml  -y
+apiVersion: apps/v1                                             apiVersion: apps/v1
+kind: Deployment                                                kind: Deployment
+metadata:                                                       metadata:
+                                                              >   creationTimestamp: null
+                                                              >   labels:
+                                                              >     app: hello-world
+  name: hello-world                                               name: hello-world
+spec:                                                           spec:
+  replicas: 1                                                     replicas: 1
+  selector:                                                       selector:
+    matchLabels:                                                    matchLabels:
+      app: hello-world                                                app: hello-world
+template:                                                     |   strategy: {}
+  metadata:                                                   |   template:
+    labels:                                                   |     metadata:
+      app: hello-world                                        |       creationTimestamp: null
+  spec:                                                       |       labels:
+    containers:                                               |         app: hello-world
+    - image: gcr.io/google-samples/hello-app:1.0              |     spec:
+      name: hello-app                                         |       containers:
+                                                              >       - image: gcr.io/google-samples/hello-app:1.0
+                                                              >         name: hello-app
+                                                              >         resources: {}
+                                                              > status: {}
+```
+
+#### application deployment process
+
+![](2023-03-30-16-56-53.png)
+
+* what the API server is doing when `kubectl create deployment` is issued
+1. admin issues `kubectl apply -f deployment.yaml`
+2. deployment will creates a `replicaset`
+3. `replicaset` will create `pods`, based on the `deployment.yaml`
+4. `API server` will parse manifest yaml and store those objects in `etcd`
+5. the `controller manager` is watching the `etcd` for any new interesting objects
+6. if recognized as interesting (like a deployment), the `controller manager` will create a `controller` that will create a `replicaset`
+7. the `replicaset` is going to create the required number of `pods` and write `pod` info to `etcd`
+8. `scheduler` is watching `etcd` for `pod` info and validates that all pods that need/should be scheduled, the `scheduler` will schedule the `pods` to run on the `nodes`.
+9. `scheduler` then updates `pod `info in `etcd` specifying the `node` where it is running
+10. note that at this point in time `pods` haven't yet started on the `nodes`, images aren't yet pulled from the repo, etc.  `nodes` aren't aware yet that there are  published `pods` to be executed.... until...
+11. on each `node`, `kubelet` is continuously watching `etcd` contents (via calls to the `api server`), and the `api server` reply will contain "yes, you have a pod that's to be scheduled"
+12. the `node` resident `kubelet` signals to the `node` resident `container runtime` to pull down the image as per manifest `spec/container/image`, and start the `pod`.
+13. if the `pod` is a member of a `service`, then once the `pod` is running, `container runtime` updates the `node` resident `kube-proxy`.
