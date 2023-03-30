@@ -301,7 +301,9 @@
 
 ### Installing Kubernetes on VMs
 * refer to wsl2.md in this repo for some work I did in that area, however I need to move on now... so I'm going to use vmware player and build four VMs.
-* "ubuntucontrol" = 192.168.207.10,"ubuntuworkernode1" = 192.168.207.11,"ubuntuworkernode2" = 192.168.207.12,"ubuntuworkernode3" = 192.168.207.13
+* you should grab vmware workstation pro download and then extract `vmnetcfg.exe` from the installer and place it in `C:\Program Files (x86)\VMware\VMware Player`
+  * configure the vswitch to be on network `172.16.94.0/24`
+* "ubuntucontrol" = 172.16.94.10,"ubuntuworkernode1" = 172.16.94.11,"ubuntuworkernode2" = 172.16.94.12,"ubuntuworkernode3" = 172.16.94.13
   * Onboard as NAT networking type
   * update local Windows host at `C:\windows\system32\drivers\etc\hosts` for all nodes' IPs
 * after ubuntu 22.02 install, configure as follows:
@@ -314,21 +316,18 @@
       ethernets:
         ens33:
           addresses:
-            - 192.168.207.10/24
+            - 172.16.94.10/24
           routes:
             - to: default
-              via: 192.168.207.2
+              via: 172.16.94.2
           nameservers:
               search: [localdomain]
-              addresses: [192.168.207.2]
+              addresses: [172.16.94.2]
     ```
-  * 
-
-
 
 ### Lab Environment Overview
 
-![](2023-03-20-15-13-46.png)
+![](2023-03-30-08-16-57.png)
 
 * one control plane node, and three worker nodes
   * `kubectl` on control plane node
@@ -348,31 +347,27 @@
     * kubectl
   * review how `systemd` manages these
    
-* interface with each VM, decrease swappiness, then install containerd
+* interface with the control plane VM, decrease swappiness, then install containerd
 ```
-#https://askubuntu.com/a/103871
-cat /proc/sys/vm/swappiness #should read 60, meaning if RAM is 60% utilized that the UMM will swap memory to disk
-sudo vim /etc/sysctl.conf
-# add to end of file vm.swappiness = 10
-sudo sysctl --system #reload sysctl.conf
-cat /proc/sys/vm/swappiness
-
+#disable swap
+sudo sed -i '/ swap / s/^/#/' /etc/fstab
+sudo swapoff -a
 
 #containerd prereqs
-cat <<EOI | sudo tee /etc/modules-load.d/containerd.conf
+cat <<EOF | sudo tee /etc/modules-load.d/containerd.conf
 overlay
 br_netfilter
-EOI
+EOF
 # affect at runtime
 sudo modprobe overlay
 sudo modprobe br_netfilter
 
 #k8s prereqs
-cat <<EOI | sudo tee /etc/sysctl.d/00-kubernetes-cri.conf
+cat <<EOF | sudo tee /etc/sysctl.d/00-kubernetes-cri.conf
 net.bridge.bridge-nf-call-iptables = 1
 net.ipv4.ip_forward = 1
 net.bridge.bridge-nf-call-ip6tables = 1
-EOI
+EOF
 # affect at runtime
 sudo sysctl --system
 
@@ -391,15 +386,15 @@ sudo systemctl restart containerd
 
 ### Demo: Installing and Configuring Kubernetes Packages
 
-* install kubernetes packages
+1. install kubernetes packages
 
 ```
 # install kubernetes
 # https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/
 curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-sudo bash -c 'cat <<EOI > /etc/apt/sources.list.d/kubernetes.list
+sudo bash -c 'cat <<EOF > /etc/apt/sources.list.d/kubernetes.list
 deb https://apt.kubernetes.io kubernetes-xenial main
-EOI'
+EOF'
 
 sudo apt update
 #list versions
@@ -413,7 +408,7 @@ sudo apt install -y kubelet=$VERSION kubeadm=$VERSION kubectl=$VERSION
 sudo apt-mark hold kubelet kubeadm kubectl containerd
 ```
 
-* review kubelet systemd unit status, note that it will fail to start because there's no cluster config (see next section)
+2. review kubelet systemd unit status, note that it will fail to start because there's no cluster config (see next section)
 ```
 sudo systemctl status kubelet.service
 ● kubelet.service - kubelet: The Kubernetes Node Agent
@@ -430,12 +425,12 @@ Mar 30 10:10:22 ubuntucontrol systemd[1]: kubelet.service: Main process exited, 
 Mar 30 10:10:22 ubuntucontrol systemd[1]: kubelet.service: Failed with result 'exit-code'.
 ```
 
-* review containerd systemd unit status
+3. review containerd systemd unit status
 ```
 sudo systemctl status containerd.service
 ```
 
-* set both `kubelet` and `containerd` to start upon system boot
+4. set both `kubelet` and `containerd` to start upon system boot
 ```
 sudo systemctl enable kubelet.service containerd.service
 ```
@@ -548,25 +543,399 @@ kubeadm join APISERVER:6443 --token [token] --discovery-token-ca-cert-hash sha25
 ```
 
 ### Demo: Creating a Cluster Control Plane Node
-* create the cluster
+1. create the cluster
+
 ```
 # https://docs.tigera.io/calico/latest/getting-started/kubernetes/self-managed-onprem/onpremises#install-calico-with-kubernetes-api-datastore-50-nodes-or-less
 wget https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
 
-#find CALICO_IPV4POOL_CIDR and modify this range to something outside of the ranges used by any infrastructure (in our case there is an overlap)
+#if you need to do this later: https://stackoverflow.com/a/60185268/843000
+#if needed, findCALICO_IPV4POOL_CIDR and modify this range to something outside of the ranges used by any infrastructure (in our case there is an overlap)
 vim calico.yaml
 
 #create a kubeconfig file
 kubeadm config print init-defaults | tee ClusterConfiguration.yaml
 vim ClusterConfiguration.yaml
+#modify localAPIEndpoint/advertiseAddress to the control plane node's address (172.16.94.10)
+#modify nodeRegistration/criSocket to the containerd socket (/run/containerd/containerd.sock)
+#modify kubernetesVersion to match the current version  (v1.20.1)
+#set the cgroupDriver to systemd (matching containerd)
+cat <<EOF | cat >> ClusterConfiguration.yaml
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfigutation
+cgroupDriver: systemd
+EOF
 
+#build the cluster!
+sudo kubeadm init --config=ClusterConfiguration.yaml --cri-socket /run/containerd/containerd.sock
+
+[init] Using Kubernetes version: v1.20.1
+[preflight] Running pre-flight checks
+[preflight] Pulling images required for setting up a Kubernetes cluster
+[preflight] This might take a minute or two, depending on the speed of your internet connection
+[preflight] You can also perform this action in beforehand using 'kubeadm config images pull'
+[certs] Using certificateDir folder "/etc/kubernetes/pki"
+[certs] Generating "ca" certificate and key
+[certs] Generating "apiserver" certificate and key
+[certs] apiserver serving cert is signed for DNS names [kubernetes kubernetes.default kubernetes.default.svc kubernetes.default.svc.cluster.local ubuntucontrol] and IPs [10.96.0.1 172.16.94.10]
+[certs] Generating "apiserver-kubelet-client" certificate and key
+[certs] Generating "front-proxy-ca" certificate and key
+[certs] Generating "front-proxy-client" certificate and key
+[certs] Generating "etcd/ca" certificate and key
+[certs] Generating "etcd/server" certificate and key
+[certs] etcd/server serving cert is signed for DNS names [localhost ubuntucontrol] and IPs [172.16.94.10 127.0.0.1 ::1]
+[certs] Generating "etcd/peer" certificate and key
+[certs] etcd/peer serving cert is signed for DNS names [localhost ubuntucontrol] and IPs [172.16.94.10 127.0.0.1 ::1]
+[certs] Generating "etcd/healthcheck-client" certificate and key
+[certs] Generating "apiserver-etcd-client" certificate and key
+[certs] Generating "sa" key and public key
+[kubeconfig] Using kubeconfig folder "/etc/kubernetes"
+[kubeconfig] Writing "admin.conf" kubeconfig file
+[kubeconfig] Writing "kubelet.conf" kubeconfig file
+[kubeconfig] Writing "controller-manager.conf" kubeconfig file
+[kubeconfig] Writing "scheduler.conf" kubeconfig file
+[kubelet-start] Writing kubelet environment file with flags to file "/var/lib/kubelet/kubeadm-flags.env"
+[kubelet-start] Writing kubelet configuration to file "/var/lib/kubelet/config.yaml"
+[kubelet-start] Starting the kubelet
+[control-plane] Using manifest folder "/etc/kubernetes/manifests"
+[control-plane] Creating static Pod manifest for "kube-apiserver"
+[control-plane] Creating static Pod manifest for "kube-controller-manager"
+[control-plane] Creating static Pod manifest for "kube-scheduler"
+[etcd] Creating static Pod manifest for local etcd in "/etc/kubernetes/manifests"
+[wait-control-plane] Waiting for the kubelet to boot up the control plane as static Pods from directory "/etc/kubernetes/manifests". This can take up to 4m0s
+[apiclient] All control plane components are healthy after 14.502704 seconds
+[upload-config] Storing the configuration used in ConfigMap "kubeadm-config" in the "kube-system" Namespace
+[kubelet] Creating a ConfigMap "kubelet-config-1.20" in namespace kube-system with the configuration for the kubelets in the cluster
+[upload-certs] Skipping phase. Please see --upload-certs
+[mark-control-plane] Marking the node ubuntucontrol as control-plane by adding the labels "node-role.kubernetes.io/master=''" and "node-role.kubernetes.io/control-plane='' (deprecated)"
+[mark-control-plane] Marking the node ubuntucontrol as control-plane by adding the taints [node-role.kubernetes.io/master:NoSchedule]
+[bootstrap-token] Using token: abcdef.0123456789abcdef
+[bootstrap-token] Configuring bootstrap tokens, cluster-info ConfigMap, RBAC Roles
+[bootstrap-token] configured RBAC rules to allow Node Bootstrap tokens to get nodes
+[bootstrap-token] configured RBAC rules to allow Node Bootstrap tokens to post CSRs in order for nodes to get long term certificate credentials
+[bootstrap-token] configured RBAC rules to allow the csrapprover controller automatically approve CSRs from a Node Bootstrap Token
+[bootstrap-token] configured RBAC rules to allow certificate rotation for all node client certificates in the cluster
+[bootstrap-token] Creating the "cluster-info" ConfigMap in the "kube-public" namespace
+[kubelet-finalize] Updating "/etc/kubernetes/kubelet.conf" to point to a rotatable kubelet client certificate and key
+[addons] Applied essential addon: CoreDNS
+[addons] Applied essential addon: kube-proxy
+
+Your Kubernetes control-plane has initialized successfully!
+
+To start using your cluster, you need to run the following as a regular user:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+Alternatively, if you are the root user, you can run:
+
+  export KUBECONFIG=/etc/kubernetes/admin.conf
+
+You should now deploy a pod network to the cluster.
+Run "kubectl apply -f [podnetwork].yaml" with one of the options listed at:
+  https://kubernetes.io/docs/concepts/cluster-administration/addons/
+
+Then you can join any number of worker nodes by running the following on each as root:
+
+kubeadm join 172.16.94.10:6443 --token abcdef.0123456789abcdef \
+    --discovery-token-ca-cert-hash sha256:3822f8596a80bbde636e3c60a2e96bb70c2314163d7d2c5180a314399ebe4769
 ```
-* create a pod network
-* review systemd units
-* static pod manifests
-* join some worker nodes
 
+2. create admin credentials and add completion
+```
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+kubectl completion bash | sudo tee /etc/bash_completion.d/kubectl > /dev/null #not working right now, it's okay
+```
+
+3. create a pod network
+```
+kubectl apply -f calico.yaml
+#note that this **WILL** fail, due to the fact that the k8s apiVersion supported in the latest calico release doesn't support k8s v1.20, but v1.21, or v1.25 (I'm reading both/either may be the case)
+  # https://github.com/projectcalico/calico/issues/6132#issuecomment-1134776125
+  # https://github.com/kubernetes-sigs/metrics-server/issues/1104
+#regardless, we will TRY to get this moving by adjusting the value from `apiVersion: policy/v1` to `apiVersion: policy/v1beta1` in ./calico.yaml... annddd... success:
+att@ubuntucontrol:~$ kubectl apply -f calico.yaml
+poddisruptionbudget.policy/calico-kube-controllers created
+serviceaccount/calico-kube-controllers unchanged
+serviceaccount/calico-node unchanged
+configmap/calico-config unchanged
+customresourcedefinition.apiextensions.k8s.io/bgpconfigurations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/bgppeers.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/blockaffinities.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/caliconodestatuses.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/clusterinformations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/felixconfigurations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/globalnetworkpolicies.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/globalnetworksets.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/hostendpoints.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ipamblocks.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ipamconfigs.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ipamhandles.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ippools.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ipreservations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/kubecontrollersconfigurations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/networkpolicies.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/networksets.crd.projectcalico.org configured
+clusterrole.rbac.authorization.k8s.io/calico-kube-controllers unchanged
+clusterrole.rbac.authorization.k8s.io/calico-node unchanged
+clusterrolebinding.rbac.authorization.k8s.io/calico-kube-controllers unchanged
+clusterrolebinding.rbac.authorization.k8s.io/calico-node unchanged
+daemonset.apps/calico-node configured
+deployment.apps/calico-kube-controllers unchanged
+```
+
+4. review all pods and nodes that were created to support the deployed services (SDN/overlay network, control plane services)
+```
+$ kubectl get pods --all-namespaces
+NAMESPACE     NAME                                       READY   STATUS    RESTARTS   AGE
+kube-system   calico-kube-controllers-5bb7768754-92rf9   1/1     Running   0          12m #this is calico related
+kube-system   calico-node-qw5pf                          0/1     Running   0          12m #this is calico related
+kube-system   coredns-74ff55c5b-qbg9s                    1/1     Running   0          54m #this is control plane add on (dns)
+kube-system   coredns-74ff55c5b-xbtsh                    1/1     Running   0          54m #this is control plane add on (dns)
+kube-system   etcd-ubuntucontrol                         1/1     Running   0          54m #this is control plane (etcd)
+kube-system   kube-apiserver-ubuntucontrol               1/1     Running   0          54m #this is control plane (api server)
+kube-system   kube-controller-manager-ubuntucontrol      1/1     Running   0          54m #this is control plane (controller manager)
+kube-system   kube-proxy-sqbm5                           1/1     Running   0          54m #this is related to local node functionality (kubeproxy, remember this implements service networking ON THIS NODE)
+kube-system   kube-scheduler-ubuntucontrol               1/1     Running   0          54m #this is control plane (scheduler)
+
+$ kubectl get nodes
+NAME            STATUS   ROLES                  AGE   VERSION
+ubuntucontrol   Ready    control-plane,master   64m   v1.20.1
+```
+
+5. review systemd units
+* remember kubelet.service systemd unit was erroring earlier because there wasn't a cluster... it should be fine now
+```
+$ sudo systemctl status kubelet.service
+● kubelet.service - kubelet: The Kubernetes Node Agent
+     Loaded: loaded (/lib/systemd/system/kubelet.service; enabled; vendor preset: enabled)
+    Drop-In: /etc/systemd/system/kubelet.service.d
+             └─10-kubeadm.conf
+     Active: active (running) since Thu 2023-03-30 13:55:56 UTC; 1h 6min ago
+       Docs: https://kubernetes.io/docs/home/
+   Main PID: 4093 (kubelet)
+      Tasks: 14 (limit: 4531)
+     Memory: 40.8M
+        CPU: 1min 50.619s
+     CGroup: /system.slice/kubelet.service
+             └─4093 /usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf --config=/var/lib/kubelet/config.yaml --container-runtime=remote --container-runtime-endpoint=/run/containerd/containerd.sock
+```
+
+6. review the static pod manifests
+* static pod manifests describe what's needed to have the pod start up on the node
+```
+$ ls /etc/kubernetes/manifests/
+etcd.yaml  kube-apiserver.yaml  kube-controller-manager.yaml  kube-scheduler.yaml
+$ sudo more /etc/kubernetes/manifests/etcd.yaml
+$ sudo more /etc/kubernetes/manifests/kube-apiserver.yaml
+$ sudo cat /etc/kubernetes/manifests/kube-apiserver.yaml | egrep cert
+```
+
+7. review kubeconfig files for all pods on this node
+* remember kubeconfig files contain cluster info (api server connection info, cluster authentication information) for the node
+```
+$ ls /etc/kubernetes
+```
 
 ### Demo: Adding a Node to Your Cluster
+1. build out the baseline config for the workernode1 VM
+```
+#disable swap
+sudo sed -i '/ swap / s/^/#/' /etc/fstab
+sudo swapoff -a
+
+#containerd prereqs
+cat <<EOF | sudo tee /etc/modules-load.d/containerd.conf
+overlay
+br_netfilter
+EOF
+# affect at runtime
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+#k8s prereqs
+cat <<EOF | sudo tee /etc/sysctl.d/00-kubernetes-cri.conf
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOF
+# affect at runtime
+sudo sysctl --system
+
+sudo apt update -y
+
+#install and configure containerd
+echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries
+sudo apt install -y containerd
+sudo mkdir -p /etc/containerd
+sudo containerd config default | sudo tee /etc/containerd/config.toml
+#set the cgroup driver to systemd in /etc/containerd/config.toml
+$below `[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]` find and change the following value:
+SystemdCgroup = true
+sudo systemctl restart containerd
+```
+
+2. install kubernetes packages
+
+```
+# install kubernetes
+# https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+sudo bash -c 'cat <<EOF > /etc/apt/sources.list.d/kubernetes.list
+deb https://apt.kubernetes.io kubernetes-xenial main
+EOF'
+
+sudo apt update
+
+#pin to a specific version during install
+VERSION=1.20.1-00
+sudo apt install -y kubelet=$VERSION kubeadm=$VERSION kubectl=$VERSION
+
+#disable upgrading of these packages by apt so that you can control what versions you're using:
+sudo apt-mark hold kubelet kubeadm kubectl containerd
+
+#validate containerd is running
+sudo systemctl status containerd.service
+#enable at boot
+sudo systemctl enable kubelet.service containerd.service
+```
+
+3. Get the cluster auth token and cert hash from the control plane node so that the worker node can join the cluster
+* you need the bootstrap token and the CA cert hash
+```
+#go back to control node
+#review bootstrap tokens (if one exists, it's fine... one the node joins the cluster, it will automatically rcv a new token when the old token expires)
+kubeadm token list
+#create a new token for fun
+kubeadm token create
+lqn8hs.yrgmidj9vrzozkxl
+
+#get the cert hash
+openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.*\s//'
+3822f8596a80bbde636e3c60a2e96bb70c2314163d7d2c5180a314399ebe4769
+
+#or just freggin do one of these little guys:
+$ kubeadm token create --print-join-command
+kubeadm join 172.16.94.10:6443 --token lk42bq.p2599stsnx88zdi8 --discovery-token-ca-cert-hash sha256:3822f8596a80bbde636e3c60a2e96bb70c2314163d7d2c5180a314399ebe4769
+```
+
+4. join the worker node to the cluster:
+* join, which will immediately trigger 
+```
+#on the worker node
+sudo kubeadm join 172.16.94.10:6443 --token lk42bq.p2599stsnx88zdi8 --discovery-token-ca-cert-hash sha256:3822f8596a80bbde636e3c60a2e96bb70c2314163d7d2c5180a314399ebe4769
+```
+* on control plane node, take a look at the nodes and note the status of workernode.  The pods that are necessary for worker node functionality and communication will immediately be deployed the new node (kubeproxy, calico, etc)
+```
+ubuntucontrol:~$ kubectl get nodes
+NAME                STATUS     ROLES                  AGE    VERSION
+ubuntucontrol       Ready      control-plane,master   154m   v1.20.1
+ubuntuworkernode1   NotReady   <none>                 22s    v1.20.1
+
+#observe the deployment progress
+ubuntucontrol:~$ kubectl get pods --all-namespaces --watch
+
+# then check to verify worker node is "Ready"
+ubuntucontrol:~$ kubectl get nodes
+NAME                STATUS   ROLES                  AGE     VERSION
+ubuntucontrol       Ready    control-plane,master   158m    v1.20.1
+ubuntuworkernode1   Ready    <none>                 4m34s   v1.20.**1**
+```
+
+5. repeat for worker nodes 2 and 3.
+* i had a bad time due to probably my ZTNA client messing around with my internet connectivity, so I was seeing 
+```
+ubuntucontrol:~$ kubectl get pods --all-namespaces --watch
+NAMESPACE     NAME                                       READY   STATUS                  RESTARTS   AGE
+kube-system   calico-kube-controllers-5bb7768754-92rf9   1/1     Running                 0          140m
+kube-system   calico-node-5x8wq                          0/1     Running                 0          29m
+kube-system   calico-node-mbdvm                          0/1     Running                 0          16m
+kube-system   calico-node-qw5pf                          0/1     Running                 0          140m
+kube-system   calico-node-zn6w6                          0/1     Init:ImagePullBackOff   0          12m
+kube-system   coredns-74ff55c5b-qbg9s                    1/1     Running                 0          3h2m
+kube-system   coredns-74ff55c5b-xbtsh                    1/1     Running                 0          3h2m
+kube-system   etcd-ubuntucontrol                         1/1     Running                 0          3h2m
+kube-system   kube-apiserver-ubuntucontrol               1/1     Running                 0          3h2m
+kube-system   kube-controller-manager-ubuntucontrol      1/1     Running                 0          3h2m
+kube-system   kube-proxy-2fkn2                           1/1     Running                 0          16m
+kube-system   kube-proxy-gnhpm                           1/1     Running                 0          12m
+kube-system   kube-proxy-sqbm5                           1/1     Running                 0          3h2m
+kube-system   kube-proxy-tkjg8                           1/1     Running                 0          29m
+kube-system   kube-scheduler-ubuntucontrol               1/1     Running                 0          3h2m
+```
+* this error is discussed well here: https://www.tutorialworks.com/kubernetes-imagepullbackoff/
+  * again, I'm convinced it's the ZTNA client causing the VM on my machine to fail
+* here's some tshooting
+```
+kubectl get pod --all-namespaces
+kubectl get daemonset --all-namespaces
+kubectl describe daemonset calico-node -n kube-system
+#interesting things here:
+containers/*/image: docker.io/calico/node:v3.25.0
+
+#determine the failing node
+kubectl get nodes
+
+#on the target node take a look at the kubelet service unit's output
+journalctl -b -f -u kubelet.service
+
+Mar 30 17:11:23 ubuntuworkernode3 kubelet[24358]: E0330 17:11:23.358875   24358 pod_workers.go:191] Error syncing pod ad4a80eb-f93d-4f24-af67-bc46dd1d183c ("calico-node-zn6w6_kube-system(ad4a80eb-f93d-4f24-af67-bc46dd1d183c)"), skipping: failed to "StartContainer" for "upgrade-ipam" with ImagePullBackOff: "Back-off pulling image \"docker.io/calico/cni:v3.25.0\""
+Mar 30 17:11:24 ubuntuworkernode3 kubelet[24358]: E0330 17:11:24.738627   24358 kubelet.go:2160] Container runtime network not ready: NetworkReady=false reason:NetworkPluginNotReady message:Network plugin returns error: cni plugin not initialized
+
+# let's smack kubelet around on the failing node
+sudo systemctl restart kubelet.service && journalctl -b -f -u kubelet.service
+#this worked...
+# note to self of probable causes: DNS, network/IP connectivity, "things not coming up in the correct order"
+```
+
 ### Managed Cloud Deployment Scenarios: AKS, EKS, and GKE
+* AWS: Elastic Kubernetes Service (EKS)
+* Google Kubernetes Engine (GKE)
+* Azure Kubernetes Service (AKS)
+
 ### Demo: Creating a Cluster in the Cloud with Azure Kubernetes Service
+
+1. install azure cli tools and auth
+```
+Invoke-WebRequest -Uri https://aka.ms/installazurecliwindows -OutFile .\AzureCLI.msi
+Start-Process msiexec.exe -Wait -ArgumentList '/I AzureCLI.msi /quiet'
+rm .\AzureCLI.msi
+az login --use-device-code
+#you might need to move $env:userprofile/.azure to $env:userprofile/_orig.azure
+```
+
+2. build resource group for AKS resources
+```
+az group create --name "kubernetes-cloud" --location centralus
+```
+
+3. list aks versions
+```
+az aks get-versions --location centralus -o table
+```
+
+4. create a cluster
+```
+az aks create --resource-group "kubernetes-cloud" --generate-ssh-keys --name cscluster --node-count 3
+```
+* if you need kubectl, you can run `az aks install-cli`
+  
+5. get creds from AKS cluster and add them to `~/.kube/config`
+```
+az aks get-credentials --resource-group "kubernetes-cloud" --name cscluster
+```
+
+6. list contexts from `~/.kube/config` and change context
+```
+kubectl config get-contexts
+kubectl config use-context cscluster
+```
+
+7. delete the AKS cluster
+```
+az aks delete --resource-group "kubernetes-cloud" --name cscluster --yes --no-wait
+```
