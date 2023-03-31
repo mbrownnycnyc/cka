@@ -1,4 +1,14 @@
-* https://app.pluralsight.com/course-player?clipId=18a74fb8-708b-4c8f-964b-41758e7245cb
+* https://app.pluralsight.com/course-player?clipId=88e0936c-e3b6-4ecc-b93a-79222bcbeb52
+
+# plan overview
+1. Kubernetes Installation and Configuration Fundamentals (3h 4m)
+2. Managing the Kubernetes API Server and Pods (3h 44m)
+3. Managing Kubernetes Controllers and Deployments (2h 48m)
+4. Configuring and Managing Kubernetes Storage and Scheduling (2h 50m) 
+5. Configuring and Managing Kubernetes Networking, Services, and Ingress (2h 6m) 
+6. Maintaining, Monitoring and Troubleshooting Kubernetes (2h 14m)
+7. Configuring and Managing Kubernetes Security (2h 16m)
+
 
 # Kubernetes installation and configuration fundamentals
 
@@ -1347,3 +1357,894 @@ template:                                                     |   strategy: {}
 11. on each `node`, `kubelet` is continuously watching `etcd` contents (via calls to the `api server`), and the `api server` reply will contain "yes, you have a pod that's to be scheduled"
 12. the `node` resident `kubelet` signals to the `node` resident `container runtime` to pull down the image as per manifest `spec/container/image`, and start the `pod`.
 13. if the `pod` is a member of a `service`, then once the `pod` is running, `container runtime` updates the `node` resident `kube-proxy`.
+
+### demo: imperative deployments and workign with resources in the clsuter
+
+1. create deployment
+```
+#this creates a deployment that's scheduled with the API Server with some accepted defaults
+kubectl create deployment hello-world --image=gcr.io/google-samples/hello-app:1.0
+#creates a deployment (replicaset) with one pod in it (replicas = 1)
+# I ran into a problem again probably due to my ZTNA client.  Error was CrashLoopBackOff... and I verified by using `describe`.  I deleted the pod with `kubectl delete pod deployment && kubectl delete deploy hello-world` and will redeploy.
+```
+
+2. create a bare pod (a pod that's not managed by a controller)
+* running a bare pod is similar to just launching a pod on docker desktop.
+* bare pods are useful for tshooting as well
+```
+kubectl run hello-world-pod --image=gcr.io/google-samples/hello-app:1.0
+```
+
+3. get info on pods
+```
+$kubectl get pods -o widede
+NAME                           READY   STATUS    RESTARTS   AGE   IP                NODE                NOMINATED NODE   READINESS GATES
+hello-world-5457b44555-f9gmd   1/1     Running   0          97s   192.168.132.131   ubuntuworkernode2   <none>           <none>
+hello-world-pod                1/1     Running   0          93s   192.168.28.68     ubuntuworkernode1   <none>           <none>
+#note that both
+# are deployed within SDN network
+# you can see which nodes are running each pod
+```
+
+4. investigate containers that are running on a node
+```
+#ssh into ubuntuworkernode2
+#since containerd is in use, use `crictl` to interface with the containerd instance via the socket
+$ sudo crictl --runtime-endpoint unix:///run/containerd/containerd.sock ps
+[sudo] password for matt:
+CONTAINER           IMAGE               CREATED             STATE               NAME                ATTEMPT             POD ID              POD
+7ff63836aebf9       13753a81eccfd       4 minutes ago       Running             hello-app           0                   f50a9fa760baa       hello-world-5457b44555-f9gmd
+771eceb0d8771       08616d26b8e74       8 hours ago         Running             calico-node         0                   952fd6fa91f00       calico-node-mbdvm
+cd426874fcb1e       e3f6fcd87756e       8 hours ago         Running             kube-proxy          0                   c6f6495ee3201       kube-proxy-2fkn2
+```
+
+5. tshooting techniques
+```
+#this will return stdout
+kubectl logs hello-world-pod
+
+#start a process inside a container inside a pod (note that /bin/sh is no longer on the image, so the following will fail)
+kubectl exec -it hello-world-pod -- /bin/sh
+```
+
+#### inspect a deployment.
+* this process is useful for tshooting
+  * specifically review Events section of each
+
+1. reviewing the earlier deployment (step 1)
+```
+$ kubectl get deployment hello-world
+NAME          READY   UP-TO-DATE   AVAILABLE   AGE
+hello-world   1/1     1            1           12h
+$ kubectl get replicaset
+NAME                     DESIRED   CURRENT   READY   AGE
+hello-world-5457b44555   1         1         1       12h
+$ kubectl get pods
+NAME                           READY   STATUS    RESTARTS   AGE
+hello-world-5457b44555-f9gmd   1/1     Running   0          12h
+hello-world-pod                1/1     Running   0          12h
+```
+
+1. review the deployment, and notice that Deployments are made up of ReplicaSets
+```
+$ kubectl describe deployment hello-world
+Name:                   hello-world
+Namespace:              default
+CreationTimestamp:      Fri, 31 Mar 2023 00:50:27 +0000
+Labels:                 app=hello-world
+Annotations:            deployment.kubernetes.io/revision: 1
+Selector:               app=hello-world
+Replicas:               1 desired | 1 updated | 1 total | 1 available | 0 unavailable
+StrategyType:           RollingUpdate
+MinReadySeconds:        0
+RollingUpdateStrategy:  25% max unavailable, 25% max surge
+Pod Template:
+  Labels:  app=hello-world
+  Containers:
+   hello-app:
+    Image:        gcr.io/google-samples/hello-app:1.0
+    Port:         <none>
+    Host Port:    <none>
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Conditions:
+  Type           Status  Reason
+  ----           ------  ------
+  Available      True    MinimumReplicasAvailable
+  Progressing    True    NewReplicaSetAvailable
+OldReplicaSets:  <none>
+NewReplicaSet:   hello-world-5457b44555 (1/1 replicas created)
+Events:          <none> #this will have a status of the deployment
+```
+
+1. take a look at the replica set.  Note the "Controlled by." ReplicaSets create the pods.
+```
+$ kubectl describe replicaset hello-world
+Name:           hello-world-5457b44555
+Namespace:      default
+Selector:       app=hello-world,pod-template-hash=5457b44555
+Labels:         app=hello-world
+                pod-template-hash=5457b44555
+Annotations:    deployment.kubernetes.io/desired-replicas: 1
+                deployment.kubernetes.io/max-replicas: 2
+                deployment.kubernetes.io/revision: 1
+Controlled By:  Deployment/hello-world
+Replicas:       1 current / 1 desired
+Pods Status:    1 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Pod Template:
+  Labels:  app=hello-world
+           pod-template-hash=5457b44555
+  Containers:
+   hello-app:
+    Image:        gcr.io/google-samples/hello-app:1.0
+    Port:         <none>
+    Host Port:    <none>
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Events:           <none>
+```
+
+1. take a look at the pods.  Note the controlled by field.
+```
+$ kubectl describe pod hello-world-5457b44555-f9gmd
+Name:         hello-world-5457b44555-f9gmd
+Namespace:    default
+Priority:     0
+Node:         ubuntuworkernode2/172.16.94.12
+Start Time:   Fri, 31 Mar 2023 00:50:27 +0000
+Labels:       app=hello-world
+              pod-template-hash=5457b44555
+Annotations:  cni.projectcalico.org/containerID: f50a9fa760baade58f37c75e07f193a8ef8289b799b6eff74d2ea62d128e82cf
+              cni.projectcalico.org/podIP: 192.168.132.131/32
+              cni.projectcalico.org/podIPs: 192.168.132.131/32
+Status:       Running
+IP:           192.168.132.131
+IPs:
+  IP:           192.168.132.131
+Controlled By:  ReplicaSet/hello-world-5457b44555
+Containers:
+  hello-app:
+    Container ID:   containerd://7ff63836aebf9f706ea13168e9fab8a4dc0fa46a84768e7f21f1b18ee4e59e6d
+    Image:          gcr.io/google-samples/hello-app:1.0
+    Image ID:       gcr.io/google-samples/hello-app@sha256:845f77fab71033404f4cfceaa1ddb27b70c3551ceb22a5e7f4498cdda6c9daea
+    Port:           <none>
+    Host Port:      <none>
+    State:          Running
+      Started:      Fri, 31 Mar 2023 00:50:28 +0000
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-b44wj (ro)
+Conditions:
+  Type              Status
+  Initialized       True
+  Ready             True
+  ContainersReady   True
+  PodScheduled      True
+Volumes:
+  default-token-b44wj:
+    Type:        Secret (a volume populated by a Secret)
+    SecretName:  default-token-b44wj
+    Optional:    false
+QoS Class:       BestEffort
+Node-Selectors:  <none>
+Tolerations:     node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                 node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:          <none>
+```
+
+### demo: exposing and accessing services in your cluster
+
+1. create a service listener
+```
+kubectl expose deployment hello-world --port=80 --target-port=8080
+```
+
+2. review service as it is
+```
+$ kubectl get service hello-world -o wide
+NAME          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE   SELECTOR
+hello-world   ClusterIP   10.97.104.123   <none>        80/TCP    37s   app=hello-world
+```
+
+3. review further details of the service
+* note the endpoints.
+  * these are the specific endpoints
+```
+$ kubectl describe service hello-world
+Name:              hello-world
+Namespace:         default
+Labels:            app=hello-world
+Annotations:       <none>
+Selector:          app=hello-world
+Type:              ClusterIP
+IP Families:       <none>
+IP:                10.97.104.123
+IPs:               10.97.104.123
+Port:              <unset>  80/TCP
+TargetPort:        8080/TCP
+Endpoints:         192.168.132.131:8080
+Session Affinity:  None
+Events:            <none>
+```
+
+4. gather info on the endpoint and then access the service
+* if there were multiple replicas distributed across worker nodes, kubeproxy would handle routing of the requests to any one of the nodes
+```
+matt@ubuntucontrol:~$ kubectl get endpoints hello-world -o wide
+NAME          ENDPOINTS              AGE
+hello-world   192.168.132.131:8080   2m58s
+matt@ubuntucontrol:~$ curl http://10.97.104.123:80
+Hello, world!
+Version: 1.0.0
+Hostname: hello-world-5457b44555-f9gmd
+matt@ubuntucontrol:~$ curl http://192.168.132.131:8080
+Hello, world!
+Version: 1.0.0
+Hostname: hello-world-5457b44555-f9gmd
+```
+
+5. generate yaml or json for the deployment
+* this isn't great for manifest production... remember you should use `--dry-run`.
+```
+$ kubectl get deployment hello-world -o yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+  creationTimestamp: "2023-03-31T00:50:27Z"
+  generation: 1
+  labels:
+    app: hello-world
+  managedFields:
+  - apiVersion: apps/v1
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:metadata:
+        f:labels:
+          .: {}
+          f:app: {}
+      f:spec:
+        f:progressDeadlineSeconds: {}
+        f:replicas: {}
+        f:revisionHistoryLimit: {}
+        f:selector: {}
+        f:strategy:
+          f:rollingUpdate:
+            .: {}
+            f:maxSurge: {}
+            f:maxUnavailable: {}
+          f:type: {}
+        f:template:
+          f:metadata:
+            f:labels:
+              .: {}
+              f:app: {}
+          f:spec:
+            f:containers:
+              k:{"name":"hello-app"}:
+                .: {}
+                f:image: {}
+                f:imagePullPolicy: {}
+                f:name: {}
+                f:resources: {}
+                f:terminationMessagePath: {}
+                f:terminationMessagePolicy: {}
+            f:dnsPolicy: {}
+            f:restartPolicy: {}
+            f:schedulerName: {}
+            f:securityContext: {}
+            f:terminationGracePeriodSeconds: {}
+    manager: kubectl-create
+    operation: Update
+    time: "2023-03-31T00:50:27Z"
+  - apiVersion: apps/v1
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:metadata:
+        f:annotations:
+          .: {}
+          f:deployment.kubernetes.io/revision: {}
+      f:status:
+        f:availableReplicas: {}
+        f:conditions:
+          .: {}
+          k:{"type":"Available"}:
+            .: {}
+            f:lastTransitionTime: {}
+            f:lastUpdateTime: {}
+            f:message: {}
+            f:reason: {}
+            f:status: {}
+            f:type: {}
+          k:{"type":"Progressing"}:
+            .: {}
+            f:lastTransitionTime: {}
+            f:lastUpdateTime: {}
+            f:message: {}
+            f:reason: {}
+            f:status: {}
+            f:type: {}
+        f:observedGeneration: {}
+        f:readyReplicas: {}
+        f:replicas: {}
+        f:updatedReplicas: {}
+    manager: kube-controller-manager
+    operation: Update
+    time: "2023-03-31T00:50:28Z"
+  name: hello-world
+  namespace: default
+  resourceVersion: "57965"
+  uid: 6f138915-2f67-40af-8ae6-6e74028327d5
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: hello-world
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: hello-world
+    spec:
+      containers:
+      - image: gcr.io/google-samples/hello-app:1.0
+        imagePullPolicy: IfNotPresent
+        name: hello-app
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+status:
+  availableReplicas: 1
+  conditions:
+  - lastTransitionTime: "2023-03-31T00:50:28Z"
+    lastUpdateTime: "2023-03-31T00:50:28Z"
+    message: Deployment has minimum availability.
+    reason: MinimumReplicasAvailable
+    status: "True"
+    type: Available
+  - lastTransitionTime: "2023-03-31T00:50:27Z"
+    lastUpdateTime: "2023-03-31T00:50:28Z"
+    message: ReplicaSet "hello-world-5457b44555" has successfully progressed.
+    reason: NewReplicaSetAvailable
+    status: "True"
+    type: Progressing
+  observedGeneration: 1
+  readyReplicas: 1
+  replicas: 1
+  updatedReplicas: 1
+
+
+$ kubectl get deployment hello-world -o json
+{
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+        "annotations": {
+            "deployment.kubernetes.io/revision": "1"
+        },
+        "creationTimestamp": "2023-03-31T00:50:27Z",
+        "generation": 1,
+        "labels": {
+            "app": "hello-world"
+        },
+        "managedFields": [
+            {
+                "apiVersion": "apps/v1",
+                "fieldsType": "FieldsV1",
+                "fieldsV1": {
+                    "f:metadata": {
+                        "f:labels": {
+                            ".": {},
+                            "f:app": {}
+                        }
+                    },
+                    "f:spec": {
+                        "f:progressDeadlineSeconds": {},
+                        "f:replicas": {},
+                        "f:revisionHistoryLimit": {},
+                        "f:selector": {},
+                        "f:strategy": {
+                            "f:rollingUpdate": {
+                                ".": {},
+                                "f:maxSurge": {},
+                                "f:maxUnavailable": {}
+                            },
+                            "f:type": {}
+                        },
+                        "f:template": {
+                            "f:metadata": {
+                                "f:labels": {
+                                    ".": {},
+                                    "f:app": {}
+                                }
+                            },
+                            "f:spec": {
+                                "f:containers": {
+                                    "k:{\"name\":\"hello-app\"}": {
+                                        ".": {},
+                                        "f:image": {},
+                                        "f:imagePullPolicy": {},
+                                        "f:name": {},
+                                        "f:resources": {},
+                                        "f:terminationMessagePath": {},
+                                        "f:terminationMessagePolicy": {}
+                                    }
+                                },
+                                "f:dnsPolicy": {},
+                                "f:restartPolicy": {},
+                                "f:schedulerName": {},
+                                "f:securityContext": {},
+                                "f:terminationGracePeriodSeconds": {}
+                            }
+                        }
+                    }
+                },
+                "manager": "kubectl-create",
+                "operation": "Update",
+                "time": "2023-03-31T00:50:27Z"
+            },
+            {
+                "apiVersion": "apps/v1",
+                "fieldsType": "FieldsV1",
+                "fieldsV1": {
+                    "f:metadata": {
+                        "f:annotations": {
+                            ".": {},
+                            "f:deployment.kubernetes.io/revision": {}
+                        }
+                    },
+                    "f:status": {
+                        "f:availableReplicas": {},
+                        "f:conditions": {
+                            ".": {},
+                            "k:{\"type\":\"Available\"}": {
+                                ".": {},
+                                "f:lastTransitionTime": {},
+                                "f:lastUpdateTime": {},
+                                "f:message": {},
+                                "f:reason": {},
+                                "f:status": {},
+                                "f:type": {}
+                            },
+                            "k:{\"type\":\"Progressing\"}": {
+                                ".": {},
+                                "f:lastTransitionTime": {},
+                                "f:lastUpdateTime": {},
+                                "f:message": {},
+                                "f:reason": {},
+                                "f:status": {},
+                                "f:type": {}
+                            }
+                        },
+                        "f:observedGeneration": {},
+                        "f:readyReplicas": {},
+                        "f:replicas": {},
+                        "f:updatedReplicas": {}
+                    }
+                },
+                "manager": "kube-controller-manager",
+                "operation": "Update",
+                "time": "2023-03-31T00:50:28Z"
+            }
+        ],
+        "name": "hello-world",
+        "namespace": "default",
+        "resourceVersion": "57965",
+        "uid": "6f138915-2f67-40af-8ae6-6e74028327d5"
+    },
+    "spec": {
+        "progressDeadlineSeconds": 600,
+        "replicas": 1,
+        "revisionHistoryLimit": 10,
+        "selector": {
+            "matchLabels": {
+                "app": "hello-world"
+            }
+        },
+        "strategy": {
+            "rollingUpdate": {
+                "maxSurge": "25%",
+                "maxUnavailable": "25%"
+            },
+            "type": "RollingUpdate"
+        },
+        "template": {
+            "metadata": {
+                "creationTimestamp": null,
+                "labels": {
+                    "app": "hello-world"
+                }
+            },
+            "spec": {
+                "containers": [
+                    {
+                        "image": "gcr.io/google-samples/hello-app:1.0",
+                        "imagePullPolicy": "IfNotPresent",
+                        "name": "hello-app",
+                        "resources": {},
+                        "terminationMessagePath": "/dev/termination-log",
+                        "terminationMessagePolicy": "File"
+                    }
+                ],
+                "dnsPolicy": "ClusterFirst",
+                "restartPolicy": "Always",
+                "schedulerName": "default-scheduler",
+                "securityContext": {},
+                "terminationGracePeriodSeconds": 30
+            }
+        }
+    },
+    "status": {
+        "availableReplicas": 1,
+        "conditions": [
+            {
+                "lastTransitionTime": "2023-03-31T00:50:28Z",
+                "lastUpdateTime": "2023-03-31T00:50:28Z",
+                "message": "Deployment has minimum availability.",
+                "reason": "MinimumReplicasAvailable",
+                "status": "True",
+                "type": "Available"
+            },
+            {
+                "lastTransitionTime": "2023-03-31T00:50:27Z",
+                "lastUpdateTime": "2023-03-31T00:50:28Z",
+                "message": "ReplicaSet \"hello-world-5457b44555\" has successfully progressed.",
+                "reason": "NewReplicaSetAvailable",
+                "status": "True",
+                "type": "Progressing"
+            }
+        ],
+        "observedGeneration": 1,
+        "readyReplicas": 1,
+        "replicas": 1,
+        "updatedReplicas": 1
+    }
+}
+```
+### demo: deleting resources
+
+1. perform deletion.
+* note the order of delete operations
+```
+$ kubectl get all
+NAME                               READY   STATUS    RESTARTS   AGE
+pod/hello-world-5457b44555-f9gmd   1/1     Running   0          12h
+pod/hello-world-pod                1/1     Running   0          12h
+
+NAME                  TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+service/hello-world   ClusterIP   10.97.104.123   <none>        80/TCP    7m31s
+service/kubernetes    ClusterIP   10.96.0.1       <none>        443/TCP   23h
+
+NAME                          READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/hello-world   1/1     1            1           12h
+
+NAME                                     DESIRED   CURRENT   READY   AGE
+replicaset.apps/hello-world-5457b44555   1         1         1       12h
+
+$ kubectl delete service hello-world
+service "hello-world" deleted
+
+$ kubectl delete deployment hello-world #this deletes the deployment, the replicaset, and the scheduled pods
+deployment.apps "hello-world" deleted
+
+$ kubectl delete pod hello-world-pod
+pod "hello-world-pod" deleted
+
+$ kubectl get all
+NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+service/kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   23h
+```
+### demo: declarative deployment and accessing and modifying existing resources in the cluster
+
+1. produce a manifest for a deployment
+```
+$ kubectl create deployment hello-world --image=gcr.io/google-samples/hello-app:1.0 --dry-run=client -o yaml | tee deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: hello-world
+  name: hello-world
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-world
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: hello-world
+    spec:
+      containers:
+      - image: gcr.io/google-samples/hello-app:1.0
+        name: hello-app
+        resources: {}
+status: {}
+```
+
+2. deploy to the cluster
+```
+$ kubectl apply -f deployment.yaml
+deployment.apps/hello-world created
+```
+
+3. create and deploy a service
+
+```
+$ kubectl expose deployment hello-world --port=80 --target-port=8080 --dry-run=client -o yaml | tee service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app: hello-world
+  name: hello-world
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: hello-world
+status:
+  loadBalancer: {}
+$ kubectl apply -f service.yaml
+service/hello-world created
+```
+
+4. check status of deployment(s)
+```
+$ kubectl get all
+NAME                               READY   STATUS    RESTARTS   AGE
+pod/hello-world-5457b44555-cvt29   1/1     Running   0          2m12s
+
+NAME                  TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+service/hello-world   ClusterIP   10.104.194.190   <none>        80/TCP    32s
+service/kubernetes    ClusterIP   10.96.0.1        <none>        443/TCP   23h
+
+NAME                          READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/hello-world   1/1     1            1           2m12s
+
+NAME                                     DESIRED   CURRENT   READY   AGE
+replicaset.apps/hello-world-5457b44555   1         1         1       2m12s
+```
+
+5. make a change to an existing deployment.
+* When you have a manifest file that's been deployed, you can simply modify this manifest, then re-`apply` and this will affect the currently running deployment.
+```
+vim deployment.yaml
+# change the spec.replicas from 1 to 20
+replicas: 20
+
+$ kubectl apply -f deployment.yaml
+deployment.apps/hello-world configured
+
+$ kubectl get all -o wide #note the replica count
+NAME                               READY   STATUS    RESTARTS   AGE     IP                NODE                NOMINATED NODE   READINESS GATES
+pod/hello-world-5457b44555-2987p   1/1     Running   0          35s     192.168.28.75     ubuntuworkernode1   <none>           <none>
+pod/hello-world-5457b44555-4wgz9   1/1     Running   0          35s     192.168.132.133   ubuntuworkernode2   <none>           <none>
+pod/hello-world-5457b44555-6r5vs   1/1     Running   0          35s     192.168.236.196   ubuntuworkernode3   <none>           <none>
+pod/hello-world-5457b44555-6wxbv   1/1     Running   0          35s     192.168.28.73     ubuntuworkernode1   <none>           <none>
+pod/hello-world-5457b44555-8898x   1/1     Running   0          35s     192.168.236.201   ubuntuworkernode3   <none>           <none>
+pod/hello-world-5457b44555-8pbvv   1/1     Running   0          35s     192.168.236.197   ubuntuworkernode3   <none>           <none>
+pod/hello-world-5457b44555-cvt29   1/1     Running   0          7m29s   192.168.132.132   ubuntuworkernode2   <none>           <none>
+pod/hello-world-5457b44555-dfbm5   1/1     Running   0          35s     192.168.132.134   ubuntuworkernode2   <none>           <none>
+pod/hello-world-5457b44555-f727c   1/1     Running   0          35s     192.168.28.71     ubuntuworkernode1   <none>           <none>
+pod/hello-world-5457b44555-fb68b   1/1     Running   0          35s     192.168.132.137   ubuntuworkernode2   <none>           <none>
+pod/hello-world-5457b44555-g6xmg   1/1     Running   0          35s     192.168.28.70     ubuntuworkernode1   <none>           <none>
+pod/hello-world-5457b44555-kkmgs   1/1     Running   0          35s     192.168.236.200   ubuntuworkernode3   <none>           <none>
+pod/hello-world-5457b44555-kpdsb   1/1     Running   0          35s     192.168.132.136   ubuntuworkernode2   <none>           <none>
+pod/hello-world-5457b44555-lqblw   1/1     Running   0          35s     192.168.132.135   ubuntuworkernode2   <none>           <none>
+pod/hello-world-5457b44555-phr22   1/1     Running   0          35s     192.168.236.198   ubuntuworkernode3   <none>           <none>
+pod/hello-world-5457b44555-q6p69   1/1     Running   0          35s     192.168.236.199   ubuntuworkernode3   <none>           <none>
+pod/hello-world-5457b44555-q8wcc   1/1     Running   0          35s     192.168.236.195   ubuntuworkernode3   <none>           <none>
+pod/hello-world-5457b44555-rnpf5   1/1     Running   0          35s     192.168.28.69     ubuntuworkernode1   <none>           <none>
+pod/hello-world-5457b44555-sln6v   1/1     Running   0          35s     192.168.28.72     ubuntuworkernode1   <none>           <none>
+pod/hello-world-5457b44555-sm944   1/1     Running   0          35s     192.168.28.74     ubuntuworkernode1   <none>           <none>
+
+NAME                  TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE     SELECTOR
+service/hello-world   ClusterIP   10.104.194.190   <none>        80/TCP    5m49s   app=hello-world
+service/kubernetes    ClusterIP   10.96.0.1        <none>        443/TCP   23h     <none>
+
+NAME                          READY   UP-TO-DATE   AVAILABLE   AGE     CONTAINERS   IMAGES                                SELECTOR
+deployment.apps/hello-world   20/20   20           20          7m29s   hello-app    gcr.io/google-samples/hello-app:1.0   app=hello-world
+
+NAME                                     DESIRED   CURRENT   READY   AGE     CONTAINERS   IMAGES                                SELECTOR
+replicaset.apps/hello-world-5457b44555   20        20        20      7m29s   hello-app    gcr.io/google-samples/hello-app:1.0   app=hello-world,pod-template-hash=5457b44555
+
+#revert to 1 replica and `apply`
+#the pods outside of the replica will Terminate then
+
+$ kubectl get all -o wide
+NAME                               READY   STATUS    RESTARTS   AGE     IP                NODE                NOMINATED NODE   READINESS GATES
+pod/hello-world-5457b44555-cvt29   1/1     Running   0          8m59s   192.168.132.132   ubuntuworkernode2   <none>           <none>
+
+NAME                  TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE     SELECTOR
+service/hello-world   ClusterIP   10.104.194.190   <none>        80/TCP    7m19s   app=hello-world
+service/kubernetes    ClusterIP   10.96.0.1        <none>        443/TCP   23h     <none>
+
+NAME                          READY   UP-TO-DATE   AVAILABLE   AGE     CONTAINERS   IMAGES                                SELECTOR
+deployment.apps/hello-world   1/1     1            1           8m59s   hello-app    gcr.io/google-samples/hello-app:1.0   app=hello-world
+
+NAME                                     DESIRED   CURRENT   READY   AGE     CONTAINERS   IMAGES                                SELECTOR
+replicaset.apps/hello-world-5457b44555   1         1         1       8m59s   hello-app    gcr.io/google-samples/hello-app:1.0   app=hello-world,pod-template-hash=5457b44555
+
+
+#expand back to 20 then apply again
+$ kubectl get deployment hello-world
+NAME          READY   UP-TO-DATE   AVAILABLE   AGE
+hello-world   20/20   20           20          11m
+
+#check service (note that this is the kubeproxy mesh, and all running pods will expose this listener to the kubeproxy LB)
+$ kubectl get service hello-world
+NAME          TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+hello-world   ClusterIP   10.104.194.190   <none>        80/TCP    10m
+
+$ curl http://10.104.194.190
+Hello, world!
+Version: 1.0.0
+Hostname: hello-world-5457b44555-fpgp8 #this a pod
+$ curl http://10.104.194.190
+Hello, world!
+Version: 1.0.0
+Hostname: hello-world-5457b44555-8qfp4 #this a pod
+$ curl http://10.104.194.190
+Hello, world!
+Version: 1.0.0
+Hostname: hello-world-5457b44555-4sdrs #this a pod
+$ curl http://10.104.194.190
+Hello, world!
+Version: 1.0.0
+Hostname: hello-world-5457b44555-6zncg #this a pod
+```
+
+6. edit a deployment's runtime config.  This is effectively affecting the API Server's (etcd) config for the deployment on-the-fly:
+```
+#change replicas to `30`
+$ kubectl edit deployment hello-world
+deployment.apps/hello-world edited
+
+$ kubectl get pods  | wc -l
+31
+
+$ kubectl get deployment hello-world
+NAME          READY   UP-TO-DATE   AVAILABLE   AGE
+hello-world   30/30   30           30          54m
+```
+
+7. change a deployment's runtime config by command
+```
+$ kubectl scale deployment hello-world --replicas=40
+
+$ kubectl get deployment hello-world
+NAME          READY   UP-TO-DATE   AVAILABLE   AGE
+hello-world   40/40   40           40          55m
+```
+
+7. delete the deployment
+```
+kubectl delete deployment hello-world
+kubectl delete service hello-world
+kubectl get pods --watch
+```
+
+# Managing the Kubernetes API Server and pods
+
+## course overview
+* using kubernetes API
+  * interaction
+  * internals
+* managing objects with labels, annotations, and namespaces
+  * organize workloads
+* runnign and managing pods
+  * how they're made
+  * how to keep them working
+
+
+## Using the Kubernetes API
+
+### kubernetes API and API server
+
+* single surface area over the resources in the cluster
+* can use api objects to model system
+  * are a collection of primitives to represent the system state
+  * enables config of state
+* API server
+  * sole way to interact with cluster
+  * sole way that k8s interacts with clsuter
+
+#### API server
+* client/server architecture
+* implements REST API over HTTP using JSON
+* client submits rquests over HTTP(S)
+* server will respnd to the request
+* the server is stateless (any conf changes made in cluster via API objects aren't stored in API server)
+  * persisted in clsuter data store (etcd)
+
+### Control Plan Node
+![](2023-03-31-10-55-42.png)
+
+* critical services that facilitate functionality
+* API server is the comm hub
+  * etcd
+  * scheduler
+  * controller manager: implements lifecycle functions
+* `kubectl` interacts with api server
+
+### k8s api objects
+* persistent entities in k8s
+* represent the state of your system
+* API objects are organized in three ways
+  * `kind`: string value represents the REST API resource (ie: pod, service, deployment, etc)
+  * `group`: group like objects together according to their function (ie: core, apps, storage)
+  * `version`: defines the version schema of the API resource object in the API server (ie: v1, beta, alpha, etc)
+
+#### Kubernetes API objects: kind
+* `pods`: used to deploy container based apps to ks
+* `deployments`: allow to declaratively deploy applications to the cluster and control image, scaling, etc
+* `service`: provide LB and persistent access points
+* `persistentvolumes`: provide persistent storage to container based apps
+* there are more!
+
+#### working with objects
+* imperative config: executing a series of commands affecting the state
+* declarative config:
+  * define the desired state in code using manifests (YAML or JSON)
+  * apply to the k8s clsuter with something like `kubectl apply`
+
+### defining a basic pod manifest manually
+* create a yaml pod manifest
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mginx=pod
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+```
+* apply with `kubectl apply -f nginz.yaml`
+
+#### working with `kubectl --dry-run`
+
+##### server-side dry-run
+* when making an API request that creates/changes resources in the cluster, you can add the `--dry-run` to the request, but it will not be persisted.
+  * this is used for validation of the config to the API server
+```
+kubectl apply -f deployment.yaml --dry-run=server
+```
+
+##### client-side dry-run
+* validates and prints the object to stdout without sending to the API server
+```
+kubectl apply -f deployment.yaml --dry-run=client
+kubectl create deployment hello-world --image=gcr.io/google-samples/hello-app:1.0 --dry-run=client -o yaml > deployment_dryrun.yaml
+```
+
+#### using the `kubectl diff`
+* you can diff manifests (or stdin) versus cluster states
+```
+kubectl diff -f newdeployment.yaml
+```
+
