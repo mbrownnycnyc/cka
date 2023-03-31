@@ -1,4 +1,4 @@
-* https://app.pluralsight.com/course-player?clipId=88e0936c-e3b6-4ecc-b93a-79222bcbeb52
+* https://app.pluralsight.com/course-player?clipId=cbf5f311-e71d-4cd6-95f6-02be68963e97
 
 # plan overview
 1. Kubernetes Installation and Configuration Fundamentals (3h 4m)
@@ -360,8 +360,9 @@
 * interface with the control plane VM, decrease swappiness, then install containerd
 ```
 #disable swap
-sudo sed -i '/ swap / s/^/#/' /etc/fstab
+sudo sed -i '/\/swap/ s/^/#/' /etc/fstab
 sudo swapoff -a
+sudo cat /proc/swaps
 
 #containerd prereqs
 cat <<EOF | sudo tee /etc/modules-load.d/containerd.conf
@@ -2246,5 +2247,589 @@ kubectl create deployment hello-world --image=gcr.io/google-samples/hello-app:1.
 * you can diff manifests (or stdin) versus cluster states
 ```
 kubectl diff -f newdeployment.yaml
+```
+
+### demo: api server discovery: listing resources, using `kubectl explain` and creating objects
+
+#### API discovery
+
+1. validate cluster context and change if needed
+```
+$ kubectl config get-contexts
+.CURRENT   NAME                          CLUSTER      AUTHINFO           NAMESPACE
+*         kubernetes-admin@kubernetes   kubernetes   kubernetes-admin
+
+$ kubectl config use-context kubernetes-admin@kubernetes
+Switched to context "kubernetes-admin@kubernetes".
+
+$ kubectl cluster-info
+Kubernetes control plane is running at https://172.16.94.10:6443
+KubeDNS is running at https://172.16.94.10:6443/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'
+```
+
+2. list API resources
+* node the kind and name
+```
+$ kubectl api-resources
+NAME                              SHORTNAMES   APIVERSION                             NAMESPACED   KIND
+bindings                                       v1                                     true         Binding
+componentstatuses                 cs           v1                                     false        ComponentStatus
+configmaps                        cm           v1                                     true         ConfigMap
+endpoints                         ep           v1                                     true         Endpoints
+events                            ev           v1                                     true         Event
+limitranges                       limits       v1                                     true         LimitRange
+namespaces                        ns           v1                                     false        Namespace
+nodes                             no           v1                                     false        Node
+persistentvolumeclaims            pvc          v1                                     true         PersistentVolumeClaim
+persistentvolumes                 pv           v1                                     false        PersistentVolume
+pods                              po           v1                                     true         Pod
+podtemplates                                   v1                                     true         PodTemplate
+replicationcontrollers            rc           v1                                     true         ReplicationController
+resourcequotas                    quota        v1                                     true         ResourceQuota
+secrets                                        v1                                     true         Secret
+serviceaccounts                   sa           v1                                     true         ServiceAccount
+services                          svc          v1                                     true         Service
+mutatingwebhookconfigurations                  admissionregistration.k8s.io/v1        false        MutatingWebhookConfiguration
+validatingwebhookconfigurations                admissionregistration.k8s.io/v1        false        ValidatingWebhookConfiguration
+customresourcedefinitions         crd,crds     apiextensions.k8s.io/v1                false        CustomResourceDefinition
+apiservices                                    apiregistration.k8s.io/v1              false        APIService
+controllerrevisions                            apps/v1                                true         ControllerRevision
+daemonsets                        ds           apps/v1                                true         DaemonSet
+deployments                       deploy       apps/v1                                true         Deployment
+replicasets                       rs           apps/v1                                true         ReplicaSet
+statefulsets                      sts          apps/v1                                true         StatefulSet
+tokenreviews                                   authentication.k8s.io/v1               false        TokenReview
+localsubjectaccessreviews                      authorization.k8s.io/v1                true         LocalSubjectAccessReview
+selfsubjectaccessreviews                       authorization.k8s.io/v1                false        SelfSubjectAccessReview
+selfsubjectrulesreviews                        authorization.k8s.io/v1                false        SelfSubjectRulesReview
+subjectaccessreviews                           authorization.k8s.io/v1                false        SubjectAccessReview
+horizontalpodautoscalers          hpa          autoscaling/v1                         true         HorizontalPodAutoscaler
+cronjobs                          cj           batch/v1beta1                          true         CronJob
+jobs                                           batch/v1                               true         Job
+certificatesigningrequests        csr          certificates.k8s.io/v1                 false        CertificateSigningRequest
+leases                                         coordination.k8s.io/v1                 true         Lease
+bgpconfigurations                              crd.projectcalico.org/v1               false        BGPConfiguration
+bgppeers                                       crd.projectcalico.org/v1               false        BGPPeer
+blockaffinities                                crd.projectcalico.org/v1               false        BlockAffinity
+caliconodestatuses                             crd.projectcalico.org/v1               false        CalicoNodeStatus
+clusterinformations                            crd.projectcalico.org/v1               false        ClusterInformation
+felixconfigurations                            crd.projectcalico.org/v1               false        FelixConfiguration
+globalnetworkpolicies                          crd.projectcalico.org/v1               false        GlobalNetworkPolicy
+globalnetworksets                              crd.projectcalico.org/v1               false        GlobalNetworkSet
+hostendpoints                                  crd.projectcalico.org/v1               false        HostEndpoint
+ipamblocks                                     crd.projectcalico.org/v1               false        IPAMBlock
+ipamconfigs                                    crd.projectcalico.org/v1               false        IPAMConfig
+ipamhandles                                    crd.projectcalico.org/v1               false        IPAMHandle
+ippools                                        crd.projectcalico.org/v1               false        IPPool
+ipreservations                                 crd.projectcalico.org/v1               false        IPReservation
+kubecontrollersconfigurations                  crd.projectcalico.org/v1               false        KubeControllersConfiguration
+networkpolicies                                crd.projectcalico.org/v1               true         NetworkPolicy
+networksets                                    crd.projectcalico.org/v1               true         NetworkSet
+endpointslices                                 discovery.k8s.io/v1beta1               true         EndpointSlice
+events                            ev           events.k8s.io/v1                       true         Event
+ingresses                         ing          extensions/v1beta1                     true         Ingress
+flowschemas                                    flowcontrol.apiserver.k8s.io/v1beta1   false        FlowSchema
+prioritylevelconfigurations                    flowcontrol.apiserver.k8s.io/v1beta1   false        PriorityLevelConfiguration
+ingressclasses                                 networking.k8s.io/v1                   false        IngressClass
+ingresses                         ing          networking.k8s.io/v1                   true         Ingress
+networkpolicies                   netpol       networking.k8s.io/v1                   true         NetworkPolicy
+runtimeclasses                                 node.k8s.io/v1                         false        RuntimeClass
+poddisruptionbudgets              pdb          policy/v1beta1                         true         PodDisruptionBudget
+podsecuritypolicies               psp          policy/v1beta1                         false        PodSecurityPolicy
+clusterrolebindings                            rbac.authorization.k8s.io/v1           false        ClusterRoleBinding
+clusterroles                                   rbac.authorization.k8s.io/v1           false        ClusterRole
+rolebindings                                   rbac.authorization.k8s.io/v1           true         RoleBinding
+roles                                          rbac.authorization.k8s.io/v1           true         Role
+priorityclasses                   pc           scheduling.k8s.io/v1                   false        PriorityClass
+csidrivers                                     storage.k8s.io/v1                      false        CSIDriver
+csinodes                                       storage.k8s.io/v1                      false        CSINode
+storageclasses                    sc           storage.k8s.io/v1                      false        StorageClass
+volumeattachments                              storage.k8s.io/v1                      false        VolumeAttachment
+```
+
+3. explain the `pod` resources
+```
+$ kubectl explain pods
+KIND:     Pod
+VERSION:  v1
+
+DESCRIPTION:
+     Pod is a collection of containers that can run on a host. This resource is
+     created by clients and scheduled onto hosts.
+
+FIELDS:
+   apiVersion   <string>
+     APIVersion defines the versioned schema of this representation of an
+     object. Servers should convert recognized schemas to the latest internal
+     value, and may reject unrecognized values. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+
+   kind <string>
+     Kind is a string value representing the REST resource this object
+     represents. Servers may infer this from the endpoint the client submits
+     requests to. Cannot be updated. In CamelCase. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+
+   metadata     <Object>
+     Standard object's metadata. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+
+   spec <Object>
+     Specification of the desired behavior of the pod. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
+   status       <Object>
+     Most recently observed status of the pod. This data may not be up to date.
+     Populated by the system. Read-only. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
+$ kubectl explain pods.spec
+$ kubectl explain pods.spec.containers
+```
+
+4. write a pod manifest
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-world
+spec:
+  containers:
+  - name: hello-world
+    image: gcr.io/google-samples/hello-app:1.0
+```
+
+5. apply this pod manifest, validate it, then delete it
+```
+$ kubectl apply -f pod.yaml
+pod/hello-world created
+
+$ kubectl get pods
+NAME          READY   STATUS    RESTARTS   AGE
+hello-world   1/1     Running   0          7s
+
+$ kubectl delete pod hello-world
+pod "hello-world" deleted
+```
+
+### demo: work with `kubectl --dry-run`
+1. validate server-side
+```
+$ kubectl apply -f deployment.yaml --dry-run=server
+deployment.apps/hello-world created (server dry run)
+```
+
+2. validate client-side
+```
+$ kubectl apply -f deployment.yaml --dry-run=client
+deployment.apps/hello-world created (dry run)
+```
+
+3. create a bad manifest and validate client-side
+```
+cat deployment.yaml | sed s/apiVersion/apiZwervsion/ > deployment-error.yaml
+$ kubectl apply -f deployment-error.yaml --dry-run=client
+error: error validating "deployment-error.yaml": error validating data: apiVersion not set; if you choose to ignore these errors, turn validation off with --validate=false
+```
+
+4. generate yaml
+```
+#validdate
+$ kubectl create deployment nginx --image=nginz --dry-run=client
+deployment.apps/nginx created (dry run)
+
+#produce yaml manifest
+$ kubectl create deployment nginx --image=nginz --dry-run=client -o yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: nginx
+  name: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - image: nginz
+        name: nginz
+        resources: {}
+status: {}
+```
+
+5. remember you can delete resources created in a manifest by `-f manifest.yaml`
+
+### demo: working with kubectl  diff
+
+1. create a second manifest with a change
+```
+cat deployment.yaml | sed -e s/replicas:\ 20/replicas:\ 5/ > deployment-new.yaml
+```
+
+2. use `kubectl diff` to compare a manifest directly to the running cluster in the current context
+```
+kubectl diff -f deployment-new.yaml
+```
+
+### API Groups and API versioning
+
+#### API group
+* enable organization of resources in k8s API
+* two high level API groups
+  * core API (legacy group): original list of resources (ie: pods)
+  * named API Groups: newer resources (ie: storage)
+* Part of the API Object's URL in API requests
+  * core API is part of the base URL
+
+##### examples of resources/API objects
+* core API groups
+  * pods, nodes, namespace, persistentvolume, persistentvolumeclaims
+* named API groups
+  * apps (ie: Deployment)
+  * storage.k8s.io (ie: StorageClass)
+  * rbac.authorization.k8s.io (ie: Role)
+
+#### API versioning
+
+![](2023-03-31-13-28-38.png)
+
+* API is versioned
+* provide stability for existing implementations
+* enable forward change
+* deprecation of features occurs in stable/GA
+
+### demo: api object discovery, API groups and versions
+
+1. review api stuff by asking the API server about `api-resources`
+* remember you're specifying an `apiVersion` in manifests...
+```
+$ kubectl api-resources | grep apps
+controllerrevisions                            apps/v1                                true         ControllerRevision
+daemonsets                        ds           apps/v1                                true         DaemonSet
+deployments                       deploy       apps/v1                                true         Deployment
+replicasets                       rs           apps/v1                                true         ReplicaSet
+statefulsets                      sts          apps/v1                                true         StatefulSet
+
+$ kubectl api-resources --api-group=apps
+NAME                  SHORTNAMES   APIVERSION   NAMESPACED   KIND
+controllerrevisions                apps/v1      true         ControllerRevision
+daemonsets            ds           apps/v1      true         DaemonSet
+deployments           deploy       apps/v1      true         Deployment
+replicasets           rs           apps/v1      true         ReplicaSet
+statefulsets          sts          apps/v1      true         StatefulSet
+
+$ kubectl explain deployment --api-version apps/v1
+```
+
+2. review api versions availabe on the api server
+```
+$ kubectl api-versions | sort
+admissionregistration.k8s.io/v1
+admissionregistration.k8s.io/v1beta1
+apiextensions.k8s.io/v1
+apiextensions.k8s.io/v1beta1
+apiregistration.k8s.io/v1
+apiregistration.k8s.io/v1beta1
+apps/v1
+authentication.k8s.io/v1
+authentication.k8s.io/v1beta1
+authorization.k8s.io/v1
+authorization.k8s.io/v1beta1
+autoscaling/v1
+autoscaling/v2beta1
+autoscaling/v2beta2
+batch/v1
+batch/v1beta1
+certificates.k8s.io/v1
+certificates.k8s.io/v1beta1
+coordination.k8s.io/v1
+coordination.k8s.io/v1beta1
+crd.projectcalico.org/v1
+discovery.k8s.io/v1beta1
+events.k8s.io/v1
+events.k8s.io/v1beta1
+extensions/v1beta1
+flowcontrol.apiserver.k8s.io/v1beta1
+networking.k8s.io/v1
+networking.k8s.io/v1beta1
+node.k8s.io/v1
+node.k8s.io/v1beta1
+policy/v1beta1
+rbac.authorization.k8s.io/v1
+rbac.authorization.k8s.io/v1beta1
+scheduling.k8s.io/v1
+scheduling.k8s.io/v1beta1
+storage.k8s.io/v1
+storage.k8s.io/v1beta1
+v1
+```
+
+### anatomy of an API request
+* when you issue a `kubectl` command, `kubectl` converts the command line and possibly the yaml manifest into json, then submits the request to the API server in the cluster context in which you're operating and have authed using the kubeconfig files.
+* REST API actions are used: GET, POST, DELETE, etc
+* requests contain specs
+* client-server architecture
+  * any client can communicate via REST to the server
+
+#### what a valid API request looks like
+* HTTP based REST API
+  * HTTP verbs (GET, POST)
+  * resource location (URI)
+  * request = verb + resource location
+  * server responds with response code
+
+#### API verbs
+* `GET`: get data for a specified resource
+* `POST`: create a resource
+* `DELETE`: delete a resource
+* `PUT`: create or update entire existing resource
+* `PATCH`: modify the specified fields of a resource
+
+##### special API requests
+* facilitating operations
+* `LOG`: retrieve logs from a container in a `pod`.
+* `EXEC`: executes a command in a container and get stdout back.
+* `WATCH`: change notifications on a resource with streaming output
+  * each resource has a `resourceVersion` (in a change table), then the `resourceVersion` if changed... notifications are sent to clients.
+
+#### API resource location (paths)
+* Core API (legacy) resource locations look like this:
+  * `http://apiserver:port/api/$VERSION/$RESOURCE_TYPE`
+  * namespaced: `http://apiserver:port/api/$VERSION/namespaces/$NAMESPACE/$RESOURCE_TYPE/$RESOURCE_NAME`
+* API Groups resource locations look like this:
+  * `http://apiserver:port/apis/$GROUPNAME/$VERSION/$RESOURCE_TYPE`
+  * namespaced: `http://apiserver:port/apis/$GROUPNAME/$VERSION/namespaces/$NAMESPACE/$RESOURCE_TYPE/$RESOURCE_NAME`
+
+#### API responses (HTTP response codes)
+* successes (2xx)
+  * 200: OK
+  * 201: created
+  * 202: accepted (async operation)
+* client errors (4xx)
+  * 401: unauthed
+  * 403: access denied
+  * 404: not found
+* server errors (5xx)
+  * 500: internal server error
+
+#### lifecycle of an api request
+
+![](2023-03-31-13-57-35.png)
+
+* connection:
+  * can you make a connection?
+  * HTTP over TCP
+  * TLS encrypted
+* authentication
+  * are you a valid user?
+  * authentication plugin
+    * modular, certs, token, etc
+  * HTTP response 401 == fail
+* authorization
+  * can you perform the requested action?
+  * VERB on NOUN (resource)
+  * default deny, roles allow VERBs
+  * HTTP response 403 == fail
+* Admission control
+  * administrative control over request
+  * additional code to queue and order requests that are being sent to the cluster
+  * it may modify (adding defaults, resource quotas, reject, etc)
+  * validate the request
+
+### demo: anatomy of an API request
+1. produce pod.yaml and apply to cluster
+
+```
+cat <<EOF | tee ~/pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-world
+spec:
+  containers:
+  - name: hello-world
+    image: gcr.io/google-samples/hello-app:1.0
+EOF
+
+kubectl apply -f pod.yaml
+```
+
+2. adjust verbosity
+
+```
+$ kubectl get pod -v 6
+I0331 18:05:07.455512   60942 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+I0331 18:05:07.467294   60942 round_trippers.go:445] GET https://172.16.94.10:6443/api/v1/namespaces/default/pods?limit=500 200 OK in 6 milliseconds
+NAME          READY   STATUS    RESTARTS   AGE
+hello-world   1/1     Running   0          16s
+
+$ kubectl get pod -v 7
+I0331 18:05:08.750068   60947 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+I0331 18:05:08.757690   60947 round_trippers.go:422] GET https://172.16.94.10:6443/api/v1/namespaces/default/pods?limit=500
+I0331 18:05:08.758062   60947 round_trippers.go:429] Request Headers:
+I0331 18:05:08.758224   60947 round_trippers.go:433]     Accept: application/json;as=Table;v=v1;g=meta.k8s.io,application/json;as=Table;v=v1beta1;g=meta.k8s.io,application/json
+I0331 18:05:08.758521   60947 round_trippers.go:433]     User-Agent: kubectl/v1.20.1 (linux/amd64) kubernetes/c4d7527
+I0331 18:05:08.764671   60947 round_trippers.go:448] Response Status: 200 OK in 5 milliseconds
+NAME          READY   STATUS    RESTARTS   AGE
+hello-world   1/1     Running   0          17s
+```
+* note the call to the API via the VERBs (`GET`)
+
+3. issue curl against the API server
+
+```
+#establish tunnel using kubeproxy
+sudo netstat -anop | grep 8001
+kubectl proxy &
+sudo netstat -anop | grep 8001
+
+curl -s http://localhost:8001/api/v1/namespaces/default/pods/hello-world | head -n 20
+fg 1
+ctrl-c
+```
+
+### demo: special API requests: watch, exec and log
+1. execute a watch
+
+```
+$ kubectl get pods --watch -v 6 &
+[1] 83573
+$ I0331 18:39:31.298968   83573 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+<snip>
+NAME          READY   STATUS    RESTARTS   AGE
+hello-world   1/1     Running   0          34m
+I0331 18:39:31.420722   83573 round_trippers.go:445] GET https://172.16.94.10:6443/api/v1/namespaces/default/pods?resourceVersion=153128&watch=true 200 OK in 0 milliseconds
+# note the `&watch=true`
+
+# see that kubectl holds open a connection to the API Server
+$ sudo netstat -plant | grep kubectl
+tcp        0      0 172.16.94.10:53836      172.16.94.10:6443       ESTABLISHED 83573/kubectl
+
+```
+
+2. delete a pod and observe the `kubectl --watch` output
+```
+$ kubectl delete pods hello-world
+hello-world   1/1     Terminating   0          37m
+pod "hello-world" deleted
+hello-world   1/1     Terminating   0          37m
+hello-world   0/1     Terminating   0          37m
+hello-world   0/1     Terminating   0          37m
+hello-world   0/1     Terminating   0          37m
+```
+
+3. recreate pod and observe the `kubectl --watch` output... then kill `kubectl --watch`
+```
+$ kubectl apply -f pod.yaml
+hello-world   0/1     Pending       0          0s
+pod/hello-world created
+hello-world   0/1     Pending       0          0s
+hello-world   0/1     ContainerCreating   0          0s
+hello-world   0/1     ContainerCreating   0          1s
+hello-world   1/1     Running             0          2s
+
+fg 1
+ctrl-c
+```
+
+4. grab some logs
+
+```
+$ kubectl logs hello-world
+.2023/03/31 18:43:12 Server listening on port 8080
+
+$ kubectl logs hello-world -v 6
+I0331 18:45:29.843142   87359 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+I0331 18:45:29.861117   87359 round_trippers.go:445] GET https://172.16.94.10:6443/api/v1/namespaces/default/pods/hello-world 200 OK in 10 milliseconds
+I0331 18:45:29.868644   87359 round_trippers.go:445] GET https://172.16.94.10:6443/api/v1/namespaces/default/pods/hello-world/log 200 OK in 3 milliseconds
+2023/03/31 18:43:12 Server listening on port 8080
+```
+
+5. create a tunnel and curl some logs
+```
+kubectl proxy &
+curl -s https://localhost:8001/api/v1/namespaces/default/pods/hello-world/log
+
+fg 1
+ctrl-c
+```
+
+### demo: authen failures and missing resources
+
+1. create a backup of kubeconfig
+```
+cp ~/.kube/config ~/.kube/config.orig
+#modify `~/.kube/config` and change `kubernetes-admin` name under `users` to `kubenetes-admin1`
+```
+
+2. execute a command
+* notice the `403` error in the returned data
+```
+$ kubectl get pods -v 6
+I0331 18:51:02.488519   90889 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+Please enter Username: foo
+Please enter Password: I0331 18:51:23.495192   90889 round_trippers.go:445] GET https://172.16.94.10:6443/api?timeout=32s 403 Forbidden in 4 milliseconds
+I0331 18:51:23.509595   90889 round_trippers.go:445] GET https://172.16.94.10:6443/apis?timeout=32s 403 Forbidden in 0 milliseconds
+I0331 18:51:23.511329   90889 cached_discovery.go:125] skipped caching discovery info, no groups found
+I0331 18:51:23.512557   90889 round_trippers.go:445] GET https://172.16.94.10:6443/api?timeout=32s 403 Forbidden in 0 milliseconds
+I0331 18:51:23.519896   90889 round_trippers.go:445] GET https://172.16.94.10:6443/apis?timeout=32s 403 Forbidden in 1 milliseconds
+I0331 18:51:23.521901   90889 cached_discovery.go:125] skipped caching discovery info, no groups found
+I0331 18:51:23.522877   90889 round_trippers.go:445] GET https://172.16.94.10:6443/api?timeout=32s 403 Forbidden in 0 milliseconds
+I0331 18:51:23.526458   90889 round_trippers.go:445] GET https://172.16.94.10:6443/apis?timeout=32s 403 Forbidden in 0 milliseconds
+I0331 18:51:23.528411   90889 cached_discovery.go:125] skipped caching discovery info, no groups found
+F0331 18:51:23.528462   90889 helpers.go:115] error: the server doesn't have a resource type "pods"
+<snip>
+```
+
+3. revert changes
+```
+mv ~/.kube/config.orig ~/.kube/config 
+```
+
+4. get a resource that doesn't exist
+* notice the `404`
+```
+$ kubectl get pods nginx-pod -v 6
+I0331 18:53:15.855410   92357 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+I0331 18:53:15.871222   92357 round_trippers.go:445] GET https://172.16.94.10:6443/api/v1/namespaces/default/pods/nginx-pod 404 Not Found in 5 milliseconds
+<snip>
+```
+
+5. perform an apply
+* notice the `GET` with response code `200`, the `GET` with response code `404` and the `POST` with a response code of `201`
+```
+$ kubectl apply -f deployment.yaml -v 6
+I0331 18:54:16.351435   92996 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+I0331 18:54:16.370436   92996 round_trippers.go:445] GET https://172.16.94.10:6443/openapi/v2?timeout=32s 200 OK in 18 milliseconds
+I0331 18:54:16.476147   92996 round_trippers.go:445] GET https://172.16.94.10:6443/apis/apps/v1/namespaces/default/deployments/hello-world 404 Not Found in 1 milliseconds
+I0331 18:54:16.482705   92996 round_trippers.go:445] POST https://172.16.94.10:6443/apis/apps/v1/namespaces/default/deployments?fieldManager=kubectl-client-side-apply 201 Created in 5 milliseconds
+deployment.apps/hello-world created
+I0331 18:54:16.483431   92996 apply.go:396] Running apply post-processor function
+```
+
+6. delete a deployment (replicaset and pods)
+* notice the `DELETE` call with the response code of `200`
+```
+$ kubectl delete deployment hello-world -v 6
+I0331 18:55:50.856381   93947 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+I0331 18:55:50.878062   93947 round_trippers.go:445] DELETE https://172.16.94.10:6443/apis/apps/v1/namespaces/default/deployments/hello-world 200 OK in 11 milliseconds
+deployment.apps "hello-world" deleted
+I0331 18:55:50.887883   93947 round_trippers.go:445] GET https://172.16.94.10:6443/apis/apps/v1/namespaces/default/deployments?fieldSelector=metadata.name%3Dhello-world 200 OK in 6 milliseconds
+```
+
+7. clean up
+```
+kubectl delete pod hello-world
 ```
 
