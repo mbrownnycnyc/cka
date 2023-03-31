@@ -1,4 +1,4 @@
-* https://app.pluralsight.com/course-player?clipId=cbf5f311-e71d-4cd6-95f6-02be68963e97
+* https://app.pluralsight.com/course-player?clipId=c340043b-980a-4341-bd1d-6bdfe710028e
 
 # plan overview
 1. Kubernetes Installation and Configuration Fundamentals (3h 4m)
@@ -2833,3 +2833,388 @@ I0331 18:55:50.887883   93947 round_trippers.go:445] GET https://172.16.94.10:64
 kubectl delete pod hello-world
 ```
 
+## managing objects with labels, annotations and namespaces
+
+### organizing objects in kubernetes
+* methods for organization
+  * namespaces: when you want to put a boundary around a resource related to security, naming or resource allocation.
+  * labels: when you want to act on an object or group of objects, or influence k8s operations
+  * annotations: when you want to add more info or metadata about an object or resource
+
+
+### introduction and working with namespaces
+
+![](2023-03-31-15-41-43.png)
+
+* abilit yto subdivide a clsuter and its resources
+  * "virtual cluster" to deploy objects into
+* namespaces give you organization (resource) boundaries
+  * maybe app envs, or stacks, or multi tenancy/teams
+  * you do this becuase you have limited hardware resources
+
+#### some details on namespaces
+* security boundary for RBAC
+* naming boundary
+  * have a resource in two separate namespaces have the same name
+    * note that a resource can only be in one namespace
+* namespaces has nothing to with the concept of namespaces in linux
+
+#### working with namespaces
+* scoping for:
+  * CRUD operations
+  * operate on objects in a namespace
+  * some objects are "namespaced" and some aren't
+    * namespaced: resources (ie: controllers, services, pods)... the things that run in a cluster
+    * not namespaced: PersistentVolumes, Nodes... things that are physical
+* default namespaces
+  * `default`: exists for when you deploy a resource and don't assign a namespace
+  * `kube-public`: created automatically and readable to all users.  stores shared objects between namespaces. (config maps, etc)
+  * `kube-system`: system pods
+* user defined namespaces can be created:
+  * imperatively with `kubectl`
+  * declaritively within a manifast
+
+### creating names spaces and creating objects in namespaces
+1. declarative namespace creation
+cat << EOF | tee namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: playgroundinyaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namesapce: playgroundinyaml
+EOD
+
+2. imperative namespace creation
+```
+kubectl create namespace playground1
+kubectl run nginz --image=nginx --namespace playground1
+```
+
+### demo: working with namespaces and objects in namespces
+1. list all namespaces and get some api-resource info
+```
+$ kubectl get namespaces
+NAME              STATUS   AGE
+default           Active   29h
+kube-node-lease   Active   29h
+kube-public       Active   29h
+kube-system       Active   29
+
+$ kubectl api-resources --namespaced=true
+NAME                        SHORTNAMES   APIVERSION                     NAMESPACED   KIND
+bindings                                 v1                             true         Binding
+configmaps                  cm           v1                             true         ConfigMap
+endpoints                   ep           v1                             true         Endpoints
+events                      ev           v1                             true         Event
+limitranges                 limits       v1                             true         LimitRange
+persistentvolumeclaims      pvc          v1                             true         PersistentVolumeClaim
+pods                        po           v1                             true         Pod
+podtemplates                             v1                             true         PodTemplate
+replicationcontrollers      rc           v1                             true         ReplicationController
+resourcequotas              quota        v1                             true         ResourceQuota
+secrets                                  v1                             true         Secret
+serviceaccounts             sa           v1                             true         ServiceAccount
+services                    svc          v1                             true         Service
+controllerrevisions                      apps/v1                        true         ControllerRevision
+daemonsets                  ds           apps/v1                        true         DaemonSet
+deployments                 deploy       apps/v1                        true         Deployment
+replicasets                 rs           apps/v1                        true         ReplicaSet
+statefulsets                sts          apps/v1                        true         StatefulSet
+localsubjectaccessreviews                authorization.k8s.io/v1        true         LocalSubjectAccessReview
+horizontalpodautoscalers    hpa          autoscaling/v1                 true         HorizontalPodAutoscaler
+cronjobs                    cj           batch/v1beta1                  true         CronJob
+jobs                                     batch/v1                       true         Job
+leases                                   coordination.k8s.io/v1         true         Lease
+networkpolicies                          crd.projectcalico.org/v1       true         NetworkPolicy
+networksets                              crd.projectcalico.org/v1       true         NetworkSet
+endpointslices                           discovery.k8s.io/v1beta1       true         EndpointSlice
+events                      ev           events.k8s.io/v1               true         Event
+ingresses                   ing          extensions/v1beta1             true         Ingress
+ingresses                   ing          networking.k8s.io/v1           true         Ingress
+networkpolicies             netpol       networking.k8s.io/v1           true         NetworkPolicy
+poddisruptionbudgets        pdb          policy/v1beta1                 true         PodDisruptionBudget
+rolebindings                             rbac.authorization.k8s.io/v1   true         RoleBinding
+roles                                    rbac.authorization.k8s.io/v1   true         Role
+
+$ kubectl api-resources --namespaced=false
+NAME                              SHORTNAMES   APIVERSION                             NAMESPACED   KIND
+componentstatuses                 cs           v1                                     false        ComponentStatus
+namespaces                        ns           v1                                     false        Namespace
+nodes                             no           v1                                     false        Node
+persistentvolumes                 pv           v1                                     false        PersistentVolume
+mutatingwebhookconfigurations                  admissionregistration.k8s.io/v1        false        MutatingWebhookConfiguration
+validatingwebhookconfigurations                admissionregistration.k8s.io/v1        false        ValidatingWebhookConfiguration
+customresourcedefinitions         crd,crds     apiextensions.k8s.io/v1                false        CustomResourceDefinition
+apiservices                                    apiregistration.k8s.io/v1              false        APIService
+tokenreviews                                   authentication.k8s.io/v1               false        TokenReview
+selfsubjectaccessreviews                       authorization.k8s.io/v1                false        SelfSubjectAccessReview
+selfsubjectrulesreviews                        authorization.k8s.io/v1                false        SelfSubjectRulesReview
+subjectaccessreviews                           authorization.k8s.io/v1                false        SubjectAccessReview
+certificatesigningrequests        csr          certificates.k8s.io/v1                 false        CertificateSigningRequest
+bgpconfigurations                              crd.projectcalico.org/v1               false        BGPConfiguration
+bgppeers                                       crd.projectcalico.org/v1               false        BGPPeer
+blockaffinities                                crd.projectcalico.org/v1               false        BlockAffinity
+caliconodestatuses                             crd.projectcalico.org/v1               false        CalicoNodeStatus
+clusterinformations                            crd.projectcalico.org/v1               false        ClusterInformation
+felixconfigurations                            crd.projectcalico.org/v1               false        FelixConfiguration
+globalnetworkpolicies                          crd.projectcalico.org/v1               false        GlobalNetworkPolicy
+globalnetworksets                              crd.projectcalico.org/v1               false        GlobalNetworkSet
+hostendpoints                                  crd.projectcalico.org/v1               false        HostEndpoint
+ipamblocks                                     crd.projectcalico.org/v1               false        IPAMBlock
+ipamconfigs                                    crd.projectcalico.org/v1               false        IPAMConfig
+ipamhandles                                    crd.projectcalico.org/v1               false        IPAMHandle
+ippools                                        crd.projectcalico.org/v1               false        IPPool
+ipreservations                                 crd.projectcalico.org/v1               false        IPReservation
+kubecontrollersconfigurations                  crd.projectcalico.org/v1               false        KubeControllersConfiguration
+flowschemas                                    flowcontrol.apiserver.k8s.io/v1beta1   false        FlowSchema
+prioritylevelconfigurations                    flowcontrol.apiserver.k8s.io/v1beta1   false        PriorityLevelConfiguration
+ingressclasses                                 networking.k8s.io/v1                   false        IngressClass
+runtimeclasses                                 node.k8s.io/v1                         false        RuntimeClass
+podsecuritypolicies               psp          policy/v1beta1                         false        PodSecurityPolicy
+clusterrolebindings                            rbac.authorization.k8s.io/v1           false        ClusterRoleBinding
+clusterroles                                   rbac.authorization.k8s.io/v1           false        ClusterRole
+priorityclasses                   pc           scheduling.k8s.io/v1                   false        PriorityClass
+csidrivers                                     storage.k8s.io/v1                      false        CSIDriver
+csinodes                                       storage.k8s.io/v1                      false        CSINode
+storageclasses                    sc           storage.k8s.io/v1                      false        StorageClass
+volumeattachments                              storage.k8s.io/v1                      false        VolumeAttachment
+
+$ kubectl describe namespaces
+Name:         default
+Labels:       <none>
+Annotations:  <none>
+Status:       Active
+
+No resource quota.
+
+No LimitRange resource.
+
+
+Name:         kube-node-lease
+Labels:       <none>
+Annotations:  <none>
+Status:       Active
+
+No resource quota.
+
+No LimitRange resource.
+
+
+Name:         kube-public
+Labels:       <none>
+Annotations:  <none>
+Status:       Active
+
+No resource quota.
+
+No LimitRange resource.
+
+
+Name:         kube-system
+Labels:       <none>
+Annotations:  <none>
+Status:       Active
+
+No resource quota.
+
+No LimitRange resource.
+```
+
+2. list pods in all namespaces and `kube-system` namespaces
+
+```
+$ kubectl get pods -A -o wide
+NAMESPACE     NAME                                       READY   STATUS    RESTARTS   AGE   IP               NODE                NOMINATED NODE   READINESS GATES
+kube-system   calico-kube-controllers-5bb7768754-92rf9   1/1     Running   1          29h   192.168.246.70   ubuntucontrol       <none>           <none>
+kube-system   calico-node-5x8wq                          0/1     Running   1          27h   172.16.94.11     ubuntuworkernode1   <none>           <none>
+kube-system   calico-node-mbdvm                          0/1     Running   1          27h   172.16.94.12     ubuntuworkernode2   <none>           <none>
+kube-system   calico-node-qw5pf                          0/1     Running   1          29h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   calico-node-zn6w6                          0/1     Running   1          27h   172.16.94.13     ubuntuworkernode3   <none>           <none>
+kube-system   coredns-74ff55c5b-qbg9s                    1/1     Running   1          30h   192.168.246.68   ubuntucontrol       <none>           <none>
+kube-system   coredns-74ff55c5b-xbtsh                    1/1     Running   1          30h   192.168.246.69   ubuntucontrol       <none>           <none>
+kube-system   etcd-ubuntucontrol                         1/1     Running   1          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   kube-apiserver-ubuntucontrol               1/1     Running   1          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   kube-controller-manager-ubuntucontrol      1/1     Running   2          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   kube-proxy-2fkn2                           1/1     Running   1          27h   172.16.94.12     ubuntuworkernode2   <none>           <none>
+kube-system   kube-proxy-gnhpm                           1/1     Running   1          27h   172.16.94.13     ubuntuworkernode3   <none>           <none>
+kube-system   kube-proxy-sqbm5                           1/1     Running   1          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-system   kube-proxy-tkjg8                           1/1     Running   1          27h   172.16.94.11     ubuntuworkernode1   <none>           <none>
+kube-system   kube-scheduler-ubuntucontrol               1/1     Running   2          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+$ kubectl get pods -n kube-system -o wide
+NAME                                       READY   STATUS    RESTARTS   AGE   IP               NODE                NOMINATED NODE   READINESS GATES
+calico-kube-controllers-5bb7768754-92rf9   1/1     Running   1          29h   192.168.246.70   ubuntucontrol       <none>           <none>
+calico-node-5x8wq                          0/1     Running   1          27h   172.16.94.11     ubuntuworkernode1   <none>           <none>
+calico-node-mbdvm                          0/1     Running   1          27h   172.16.94.12     ubuntuworkernode2   <none>           <none>
+calico-node-qw5pf                          0/1     Running   1          29h   172.16.94.10     ubuntucontrol       <none>           <none>
+calico-node-zn6w6                          0/1     Running   1          27h   172.16.94.13     ubuntuworkernode3   <none>           <none>
+coredns-74ff55c5b-qbg9s                    1/1     Running   1          30h   192.168.246.68   ubuntucontrol       <none>           <none>
+coredns-74ff55c5b-xbtsh                    1/1     Running   1          30h   192.168.246.69   ubuntucontrol       <none>           <none>
+etcd-ubuntucontrol                         1/1     Running   1          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-apiserver-ubuntucontrol               1/1     Running   1          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-controller-manager-ubuntucontrol      1/1     Running   2          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-proxy-2fkn2                           1/1     Running   1          27h   172.16.94.12     ubuntuworkernode2   <none>           <none>
+kube-proxy-gnhpm                           1/1     Running   1          27h   172.16.94.13     ubuntuworkernode3   <none>           <none>
+kube-proxy-sqbm5                           1/1     Running   1          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+kube-proxy-tkjg8                           1/1     Running   1          27h   172.16.94.11     ubuntuworkernode1   <none>           <none>
+kube-scheduler-ubuntucontrol               1/1     Running   2          30h   172.16.94.10     ubuntucontrol       <none>           <none>
+```
+
+3. create a namespace imperatively
+```
+$ kubectl create namespace playground1
+namespace/playground1 created
+
+$ kubectl create namespace Playground1 #sorry no upper case letters
+The Namespace "Playground1" is invalid: metadata.name: Invalid value: "Playground1": a lowercase RFC 1123 label must consist of lower case alphanumeric characters or '-', and must start and end with an alphanumeric character (e.g. 'my-name',  or '123-abc', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?')
+```
+
+3. create a namespace declaratively
+
+```
+cat <<EOF | tee namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: playgroundinyaml
+EOF
+
+$ kubectl apply -f namespace.yaml
+namespace/playgroundinyaml created
+```
+
+4. list namesapces
+
+```
+$ kubectl get namespaces
+NAME               STATUS   AGE
+default            Active   30h
+kube-node-lease    Active   30h
+kube-public        Active   30h
+kube-system        Active   30h
+playground1        Active   102s
+playgroundinyaml   Active   4s
+```
+
+5. create a deployment within a namespace declaratively, get info on the `pods`, then delete the pods, realize that k8s redeployed accordding to the `etcd`, then delete the namespace (which deletes any resources within the namespace)
+* note the use of metadata.namespace
+```
+cat <<EOF | tee deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world
+  labels:
+    app: hello-world
+  namespace: playground1
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: hello-world
+  template:
+    metadata:
+      labels:
+        app: hello-world
+    spec:
+      containers:
+      - name: hello-world
+        image: gcr.io/google-samples/hello-app:1.0
+        ports:
+        - containerPort: 8080
+EOF
+
+$ kubectl apply -f deployment.yaml
+deployment.apps/hello-world created
+
+$ kubectl get pods -n playground1
+NAME                           READY   STATUS    RESTARTS   AGE
+hello-world-5f7cd95c4b-5p522   1/1     Running   0          2m14s
+hello-world-5f7cd95c4b-dgjl8   1/1     Running   0          2m14s
+hello-world-5f7cd95c4b-lkhcr   1/1     Running   0          2m14s
+hello-world-5f7cd95c4b-rlgmh   1/1     Running   0          2m14s
+
+$ kubectl delete pods --all --namespace playground1
+pod "hello-world-5f7cd95c4b-5p522" deleted
+pod "hello-world-5f7cd95c4b-dgjl8" deleted
+pod "hello-world-5f7cd95c4b-lkhcr" deleted
+pod "hello-world-5f7cd95c4b-rlgmh" deleted
+
+$ kubectl get pods --namespace playground1
+NAME                           READY   STATUS    RESTARTS   AGE
+hello-world-5f7cd95c4b-7wrnd   1/1     Running   0          53s
+hello-world-5f7cd95c4b-c7mq7   1/1     Running   0          53s
+hello-world-5f7cd95c4b-q5npz   1/1     Running   0          53s
+hello-world-5f7cd95c4b-sz58k   1/1     Running   0          53s
+
+$ kubectl delete namespace playground1
+namespace "playground1" deleted
+
+$ kubectl delete namespace playgroundinyaml
+namespace "playgroundinyaml" deleted
+```
+
+### introducing and workig gwith labels and how k8s uses labels
+* `Label Selectors` are used to select/query Objects
+  * returns collections of Objects that satisfy search conditions
+  * enables you to perform operations on a collection fo resources... like `Pods`
+* labels are...
+  * used to organize resources (pods, nodes, etc)
+  * used to influence the internal operations of k8s cluster
+  * a non-hierarchical, key/value pair
+* resources can have more than one label per resource
+* enables more complex representation of state and ability to query
+  * keys = 63 chars or less
+  * values = 253 chars or less
+
+### using labels
+* creating resources with `Labels`
+  * imperatively with `kubectl`
+  * declaratively with a manifest
+* editign existing resources' labels
+  * assign new label
+  * overwrite existing
+* you would use labels:
+  * to isolate applications for example
+
+#### querying usign labels and selectors
+```
+kubectl get pods --show-labels
+kubectl get pods --selector tier=prod
+kubectl get pods -l 'tier in (prod,qa)`
+kubectl get pods -l 'tier notin (prod,qa)`
+kubectl get nodes --show-labels
+```
+
+#### how kubernetes itself uses labels
+* `Controllers` and `Services` match `Pods` using selectors
+  * it's how k8s cluster knows who belongs to watch
+* used to influences pod scheduling on nodes
+  * scheduling to specific nodes using selectors
+  * special hardware (SSD or GPU) using selectors
+
+#### Example: k8s functionality based on labels... Services
+![](2023-03-31-16-25-10.png)
+* if we purposefully remove a `label` from a single `pod`, then the Service Controller deregisters
+
+#### Example: k8s functionality based on labels... controller operations
+![](2023-03-31-16-31-42.png)
+* deployments change `replicasets` and `pods`
+  * if you remove a `label` on a `pod`, then the `pod` is removed from the `replicaset`
+
+#### Example: k8s functionality based on labels... scheduling pods to specific nodes
+![](2023-03-31-16-43-03.png)
+* when you define a `node`, you can specify a `label` for the `node` (ie: "hardware=SSD" or "hardware=GPU")
+* when you define a `pod`, you can specify a `selector` with the `label` you wish (ie: SSD or GPU)
+
+#### declarative labeling example: deployment and service
+* deployment example:
+![](2023-03-31-16-44-24.png)
+
+* service example:
+![](2023-03-31-16-45-27.png)
+
+### demo: working with labels: creating querying and editing
