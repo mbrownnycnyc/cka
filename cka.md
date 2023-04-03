@@ -117,8 +117,6 @@
   * can be virtual or physical machines
 
 #### control plane node
-![](2022-08-30-06-44-16.png)
-
 * `API Server`: primary access point for cluster admin, comm hub, it's stateless.
   * `kubectl` interacts with the API Server to configure.
   * central to the control of cluster, config changes are communicated via this component.
@@ -3218,3 +3216,277 @@ kubectl get nodes --show-labels
 ![](2023-03-31-16-45-27.png)
 
 ### demo: working with labels: creating querying and editing
+
+1. create manifest
+
+```
+cat <<EOF | tee CreatePodsWithLabels.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod-1
+  labels: 
+    app: MyWebApp
+    deployment: v1
+    tier: prod
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod-2
+  labels: 
+    app: MyWebApp
+    deployment: v1.1
+    tier: prod
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod-3
+  labels: 
+    app: MyWebApp
+    deployment: v1.1
+    tier: qa
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod-4
+  labels: 
+    app: MyAdminApp
+    deployment: v1
+    tier: prod
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+---
+EOF
+```
+* note the use of `labels` for each `kind`.
+
+2. Apply this manifest and verify
+```
+$ kubectl apply -f CreatePodsWithLabels.yaml
+pod/nginx-pod-1 created
+pod/nginx-pod-2 created
+pod/nginx-pod-3 created
+pod/nginx-pod-4 created
+
+$ kubectl get pods -o wide --show-labels
+NAME          READY   STATUS    RESTARTS   AGE   IP                NODE                NOMINATED NODE   READINESS GATES   LABELS
+nginx-pod-1   1/1     Running   0          55s   192.168.28.100    ubuntuworkernode1   <none>           <none>            app=MyWebApp,deployment=v1,tier=prod
+nginx-pod-2   1/1     Running   0          55s   192.168.236.225   ubuntuworkernode3   <none>           <none>            app=MyWebApp,deployment=v1.1,tier=prod
+nginx-pod-3   1/1     Running   0          55s   192.168.132.161   ubuntuworkernode2   <none>           <none>            app=MyWebApp,deployment=v1.1,tier=qa
+nginx-pod-4   1/1     Running   0          55s   192.168.132.162   ubuntuworkernode2   <none>           <none>            app=MyAdminApp,deployment=v1,tier=prod
+
+$ kubectl describe pod nginx-pod-1 | head
+Name:         nginx-pod-1
+Namespace:    default
+Priority:     0
+Node:         ubuntuworkernode1/172.16.94.11
+Start Time:   Mon, 03 Apr 2023 16:14:35 +0000
+Labels:       app=MyWebApp
+              deployment=v1
+              tier=prod
+Annotations:  cni.projectcalico.org/containerID: e701ee6e1cf6680325a29683a437c7f716d33c494e5a30eac61311e88452ad71
+              cni.projectcalico.org/podIP: 192.168.28.100/32
+```
+
+3. querying labels using selectors
+
+```
+$ kubectl get pods --selector tier=prod
+NAME          READY   STATUS    RESTARTS   AGE
+nginx-pod-1   1/1     Running   0          105s
+nginx-pod-2   1/1     Running   0          105s
+nginx-pod-4   1/1     Running   0          105s
+
+$ kubectl get pods -l tier=prod
+NAME          READY   STATUS    RESTARTS   AGE
+nginx-pod-1   1/1     Running   0          2m6s
+nginx-pod-2   1/1     Running   0          2m6s
+nginx-pod-4   1/1     Running   0          2m6s
+
+$ kubectl get pods -l 'tier=prod,app=MyWebApp' --show-labels
+NAME          READY   STATUS    RESTARTS   AGE     LABELS
+nginx-pod-1   1/1     Running   0          2m39s   app=MyWebApp,deployment=v1,tier=prod
+nginx-pod-2   1/1     Running   0          2m39s   app=MyWebApp,deployment=v1.1,tier=prod
+
+$ kubectl get pods -l 'tier in (prod,qa),app!=MyWebApp' --show-labels
+NAME          READY   STATUS    RESTARTS   AGE     LABELS
+nginx-pod-4   1/1     Running   0          3m11s   app=MyAdminApp,deployment=v1,tier=prod
+
+$ kubectl get pods -L tier
+NAME          READY   STATUS    RESTARTS   AGE     TIER
+nginx-pod-1   1/1     Running   0          3m32s   prod
+nginx-pod-2   1/1     Running   0          3m32s   prod
+nginx-pod-3   1/1     Running   0          3m32s   qa
+nginx-pod-4   1/1     Running   0          3m32s   prod
+
+$ kubectl get pods -L app,tier
+NAME          READY   STATUS    RESTARTS   AGE     APP          TIER
+nginx-pod-1   1/1     Running   0          3m48s   MyWebApp     prod
+nginx-pod-2   1/1     Running   0          3m48s   MyWebApp     prod
+nginx-pod-3   1/1     Running   0          3m48s   MyWebApp     qa
+nginx-pod-4   1/1     Running   0          3m48s   MyAdminApp   prod
+```
+
+4. editing an existing label in `etcd`
+```
+$ kubectl label pod nginx-pod-1 tier=non-prod --overwrite
+pod/nginx-pod-1 labeled
+$ kubectl get pod nginx-pod-1 --show-labels
+NAME          READY   STATUS    RESTARTS   AGE     LABELS
+nginx-pod-1   1/1     Running   0          5m29s   app=MyWebApp,deployment=v1,tier=non-prod
+```
+
+5. add a new label in `etcd`
+```
+$ kubectl label pod nginx-pod-1 another=Label
+pod/nginx-pod-1 labeled
+$ kubectl get pod nginx-pod-1 --show-labels
+NAME          READY   STATUS    RESTARTS   AGE    LABELS
+nginx-pod-1   1/1     Running   0          6m9s   another=Label,app=MyWebApp,deployment=v1,tier=non-prod
+
+```
+
+6. remove an existing label in `etcd`
+```
+#just a minus sign ()`-`)
+$ kubectl label pod nginx-pod-1 another-
+pod/nginx-pod-1 labeled
+$ kubectl get pod nginx-pod-1 --show-labels
+NAME          READY   STATUS    RESTARTS   AGE     LABELS
+nginx-pod-1   1/1     Running   0          6m57s   app=MyWebApp,deployment=v1,tier=non-prod
+```
+
+7. perform an operation on a collection of pods based on a label query
+
+```
+$ kubectl label pod --all tier=non-prod --overwrite
+pod/nginx-pod-1 not labeled #because this already has the label `tier=nonprod` set
+pod/nginx-pod-2 labeled
+pod/nginx-pod-3 labeled
+pod/nginx-pod-4 labeled
+$ kubectl get pod --show-labels
+NAME          READY   STATUS    RESTARTS   AGE     LABELS
+nginx-pod-1   1/1     Running   0          8m44s   app=MyWebApp,deployment=v1,tier=non-prod
+nginx-pod-2   1/1     Running   0          8m44s   app=MyWebApp,deployment=v1.1,tier=non-prod
+nginx-pod-3   1/1     Running   0          8m44s   app=MyWebApp,deployment=v1.1,tier=non-prod
+nginx-pod-4   1/1     Running   0          8m44s   app=MyAdminApp,deployment=v1,tier=non-prod
+```
+
+8. delete all pods matching the tier=non-prod label
+```
+$ kubectl delete pod -l tier=non-prod
+pod "nginx-pod-1" deleted
+pod "nginx-pod-2" deleted
+pod "nginx-pod-3" deleted
+pod "nginx-pod-4" deleted
+
+$ kubectl get pods
+No resources found in default namespace.
+```
+
+### demo: deployments, replicasets, labels and selectors
+
+1. create manifest
+
+```
+cat <<EOF | tee deployment-label.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world
+  labels:
+    app: hello-world
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: hello-world
+  template:
+    metadata:
+      labels:
+        app: hello-world
+    spec:
+      containers:
+      - name: hello-world
+        image: psk8s.azurecr.io/hello-app:1.0
+        ports:
+        - containerPort: 8080
+EOF
+```
+
+2. Apply this manifest and verify
+
+```
+$ kubectl apply -f deployment-label.yaml
+deployment.apps/hello-world created
+
+$ kubectl get pods -o wide --show-labels
+NAME                           READY   STATUS    RESTARTS   AGE   IP                NODE                NOMINATED NODE   READINESS GATES   LABELS
+hello-world-5f7cd95c4b-grgpp   1/1     Running   0          4s    192.168.132.163   ubuntuworkernode2   <none>           <none>            app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-hl84v   1/1     Running   0          4s    192.168.28.102    ubuntuworkernode1   <none>           <none>            app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-tjj2p   1/1     Running   0          4s    192.168.236.226   ubuntuworkernode3   <none>           <none>            app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-zfcng   1/1     Running   0          4s    192.168.28.101    ubuntuworkernode1   <none>           <none>            app=hello-world,pod-template-hash=5f7cd95c4b
+```
+
+3. review deployment info
+
+* note the 'selectors' and 'pod template.labels'
+```
+$ kubectl describe deployment hello-world
+Name:                   hello-world
+Namespace:              default
+CreationTimestamp:      Mon, 03 Apr 2023 16:30:36 +0000
+Labels:                 app=hello-world
+Annotations:            deployment.kubernetes.io/revision: 1
+Selector:               app=hello-world
+Replicas:               4 desired | 4 updated | 4 total | 4 available | 0 unavailable
+StrategyType:           RollingUpdate
+MinReadySeconds:        0
+RollingUpdateStrategy:  25% max unavailable, 25% max surge
+Pod Template:
+  Labels:  app=hello-world
+  Containers:
+   hello-world:
+    Image:        psk8s.azurecr.io/hello-app:1.0
+    Port:         8080/TCP
+    Host Port:    0/TCP
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Conditions:
+  Type           Status  Reason
+  ----           ------  ------
+  Available      True    MinimumReplicasAvailable
+  Progressing    True    NewReplicaSetAvailable
+OldReplicaSets:  <none>
+NewReplicaSet:   hello-world-5f7cd95c4b (4/4 replicas created)
+Events:
+  Type    Reason             Age    From                   Message
+  ----    ------             ----   ----                   -------
+  Normal  ScalingReplicaSet  2m55s  deployment-controller  Scaled up replica set hello-world-5f7cd95c4b to 4
+```
