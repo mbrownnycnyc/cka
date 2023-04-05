@@ -8,7 +8,9 @@
 5. Configuring and Managing Kubernetes Networking, Services, and Ingress (2h 6m) 
 6. Maintaining, Monitoring and Troubleshooting Kubernetes (2h 14m)
 7. Configuring and Managing Kubernetes Security (2h 16m)
-
+* take a look at the LFCS, as I should be able to manage this once I finish reading `How Linux Works, 3rd Edition, What Every Superuser Should Know by Brian Ward`
+  * https://training.linuxfoundation.org/wp-content/uploads/2019/04/LFCS-Practice-Questions-v1.0.pdf
+  * https://github.com/willher/LFCS-Practice-Exam
 
 # Kubernetes installation and configuration fundamentals
 
@@ -3453,9 +3455,9 @@ hello-world-5f7cd95c4b-tjj2p   1/1     Running   0          4s    192.168.236.22
 hello-world-5f7cd95c4b-zfcng   1/1     Running   0          4s    192.168.28.101    ubuntuworkernode1   <none>           <none>            app=hello-world,pod-template-hash=5f7cd95c4b
 ```
 
-3. review deployment info
+3. review deployment info:
 
-* note the 'selectors' and 'pod template.labels'
+* note the 'selectors' and 'pod template.labels' and the `newreplicaset` values
 ```
 $ kubectl describe deployment hello-world
 Name:                   hello-world
@@ -3490,3 +3492,655 @@ Events:
   ----    ------             ----   ----                   -------
   Normal  ScalingReplicaSet  2m55s  deployment-controller  Scaled up replica set hello-world-5f7cd95c4b to 4
 ```
+
+4. review the `replicaset`
+* note:
+  * the name of the `replicaset` (hello-world-5f7cd95c4b)
+    * that last hash is the `pod-template-hash`, which is a `selector`
+  * the selector will let the k8s cluster be aware of which resources:
+    * which pods match the selectors
+    * review: 'Pod Template.Labels'
+```
+#noting the above newreplicaset=hello-world-5f7cd95c4b
+$ kubectl describe replicaset hello-world
+Name:           hello-world-5f7cd95c4b
+Namespace:      default
+Selector:       app=hello-world,pod-template-hash=5f7cd95c4b
+Labels:         app=hello-world
+                pod-template-hash=5f7cd95c4b
+Annotations:    deployment.kubernetes.io/desired-replicas: 4
+                deployment.kubernetes.io/max-replicas: 5
+                deployment.kubernetes.io/revision: 1
+Controlled By:  Deployment/hello-world
+Replicas:       4 current / 4 desired
+Pods Status:    4 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Pod Template:
+  Labels:  app=hello-world
+           pod-template-hash=5f7cd95c4b
+  Containers:
+   hello-world:
+    Image:        psk8s.azurecr.io/hello-app:1.0
+    Port:         8080/TCP
+    Host Port:    0/TCP
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Events:
+  Type    Reason            Age   From                   Message
+  ----    ------            ----  ----                   -------
+  Normal  SuccessfulCreate  10m   replicaset-controller  Created pod: hello-world-5f7cd95c4b-grgpp
+  Normal  SuccessfulCreate  10m   replicaset-controller  Created pod: hello-world-5f7cd95c4b-zfcng
+  Normal  SuccessfulCreate  10m   replicaset-controller  Created pod: hello-world-5f7cd95c4b-tjj2p
+  Normal  SuccessfulCreate  10m   replicaset-controller  Created pod: hello-world-5f7cd95c4b-hl84v
+```
+
+5. review pods
+* note the `pod-template-hash`
+```
+$ kubectl get pods --show-labels
+NAME                           READY   STATUS    RESTARTS   AGE   LABELS
+hello-world-5f7cd95c4b-grgpp   1/1     Running   0          14m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-hl84v   1/1     Running   0          14m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-tjj2p   1/1     Running   0          14m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-zfcng   1/1     Running   0          14m   app=hello-world,pod-template-hash=5f7cd95c4b
+```
+
+6. edit the `pod-template-hash` label of one pod
+* we know what's going to happen:
+  * the `replicaset` describes the replicas (which is `4`)... the pod-template-hash is used to track the pods that should exist in the replicaset.
+    * once the `scheduling manager` sees in `etcd` that the this `replicaset` is not in desired that... the scheduling manager will use the controller to launch a new pod to reach desired state.
+```
+#list all pod names
+$ kubectl get pods -o json | jq '.items[].metadata.name' -r
+hello-world-5f7cd95c4b-grgpp
+hello-world-5f7cd95c4b-hl84v
+hello-world-5f7cd95c4b-tjj2p
+hello-world-5f7cd95c4b-zfcng
+
+# edit the pod-template-hash of `hello-world-5f7cd95c4b-grgpp`
+$ kubectl label pod hello-world-5f7cd95c4b-grgpp pod-template-hash=DEBUG --overwrite
+pod/hello-world-5f7cd95c4b-grgpp labeled
+
+$ kubectl get pods --show-labels
+NAME                           READY   STATUS    RESTARTS   AGE   LABELS
+hello-world-5f7cd95c4b-grgpp   1/1     Running   0          27m   app=hello-world,pod-template-hash=DEBUG
+hello-world-5f7cd95c4b-h7chl   1/1     Running   0          19s   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-hl84v   1/1     Running   0          27m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-tjj2p   1/1     Running   0          27m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-zfcng   1/1     Running   0          27m   app=hello-world,pod-template-hash=5f7cd95c4b
+# note that the affected pod is still up and running
+```
+
+### demo: services, labels, selectors and scheduling pods to nodes
+
+1. instantiate a service:
+
+```
+$ kubectl apply -f service.yaml
+service/hello-world created
+```
+2. validate the service
+* note the `endpoints` are exposed on the `pods`
+* note the 'selector' of 'app=hello-world' as this will be used to qualify pods with a matching label.
+```
+$ kubectl get service
+NAME          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+hello-world   ClusterIP   10.101.83.247   <none>        80/TCP    27s
+kubernetes    ClusterIP   10.96.0.1       <none>        443/TCP   4d3h
+
+$ kubectl describe service hello-world
+Name:              hello-world
+Namespace:         default
+Labels:            app=hello-world
+Annotations:       <none>
+Selector:          app=hello-world
+Type:              ClusterIP
+IP Families:       <none>
+IP:                10.101.83.247
+IPs:               10.101.83.247
+Port:              <unset>  80/TCP
+TargetPort:        8080/TCP
+Endpoints:         192.168.132.163:8080,192.168.132.164:8080,192.168.236.226:8080 + 2 more...
+Session Affinity:  None
+Events:            <none>
+```
+
+3. validate the endpoints
+* note that there are five pods that are exposing endpoints via 'subsets.addresses'
+  * remember there are five pods now
+```
+$ kubectl describe endpoints hello-world
+Name:         hello-world
+Namespace:    default
+Labels:       app=hello-world
+Annotations:  endpoints.kubernetes.io/last-change-trigger-time: 2023-04-03T17:00:37Z
+Subsets:
+  Addresses:          192.168.132.163,192.168.132.164,192.168.236.226,192.168.28.101,192.168.28.102
+  NotReadyAddresses:  <none>
+  Ports:
+    Name     Port  Protocol
+    ----     ----  --------
+    <unset>  8080  TCP
+
+Events:  <none>
+
+#which pods are offering this service? --> see selector used in the output of `kubectl describe service hello-world` that match the label:
+$ kubectl get pods --show-labels
+NAME                           READY   STATUS    RESTARTS   AGE   LABELS
+hello-world-5f7cd95c4b-grgpp   1/1     Running   0          37m   app=hello-world,pod-template-hash=DEBUG
+hello-world-5f7cd95c4b-h7chl   1/1     Running   0          10m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-hl84v   1/1     Running   0          37m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-tjj2p   1/1     Running   0          37m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-zfcng   1/1     Running   0          37m   app=hello-world,pod-template-hash=5f7cd95c4b
+```
+
+4. evict the pod "hello-world-5f7cd95c4b-grgpp" from the endpoint and validate that the pod is evicted
+```
+$ kubectl label pod hello-world-5f7cd95c4b-grgpp app=DEBUG --overwrite
+pod/hello-world-5f7cd95c4b-grgpp labeled
+
+$ kubectl get pods --show-labels
+NAME                           READY   STATUS    RESTARTS   AGE   LABELS
+hello-world-5f7cd95c4b-grgpp   1/1     Running   0          38m   app=DEBUG,pod-template-hash=DEBUG
+hello-world-5f7cd95c4b-h7chl   1/1     Running   0          11m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-hl84v   1/1     Running   0          38m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-tjj2p   1/1     Running   0          38m   app=hello-world,pod-template-hash=5f7cd95c4b
+hello-world-5f7cd95c4b-zfcng   1/1     Running   0          38m   app=hello-world,pod-template-hash=5f7cd95c4b
+
+$ kubectl describe endpoints hello-world
+Name:         hello-world
+Namespace:    default
+Labels:       app=hello-world
+Annotations:  <none>
+Subsets:
+  Addresses:          192.168.132.164,192.168.236.226,192.168.28.101,192.168.28.102 #note only four IPs
+  NotReadyAddresses:  <none>
+  Ports:
+    Name     Port  Protocol
+    ----     ----  --------
+    <unset>  8080  TCP
+
+Events:  <none>
+```
+
+5. clean up
+```
+kubectl delete deployment hello-world
+kubectl delete service hello-world
+kubectl delete pod hello-world-5f7cd95c4b-grgpp
+$ kubectl get all
+NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+service/kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   4d3h
+```
+
+### demo: schedule a pod to a specific node
+
+1. review `labels` on `nodes`
+```
+$ kubectl get nodes --show-labels
+NAME                STATUS   ROLES                  AGE    VERSION   LABELS
+ubuntucontrol       Ready    control-plane,master   4d3h   v1.20.1   beta.kubernetes.io/arch=amd64,beta.kubernetes.io/os=linux,kubernetes.io/arch=amd64,kubernetes.io/hostname=ubuntucontrol,kubernetes.io/os=linux,node-role.kubernetes.io/control-plane=,node-role.kubernetes.io/master=
+ubuntuworkernode1   Ready    <none>                 4d     v1.20.1   beta.kubernetes.io/arch=amd64,beta.kubernetes.io/os=linux,kubernetes.io/arch=amd64,kubernetes.io/hostname=ubuntuworkernode1,kubernetes.io/os=linux
+ubuntuworkernode2   Ready    <none>                 4d     v1.20.1   beta.kubernetes.io/arch=amd64,beta.kubernetes.io/os=linux,kubernetes.io/arch=amd64,kubernetes.io/hostname=ubuntuworkernode2,kubernetes.io/os=linux
+ubuntuworkernode3   Ready    <none>                 4d     v1.20.1   beta.kubernetes.io/arch=amd64,beta.kubernetes.io/os=linux,kubernetes.io/arch=amd64,kubernetes.io/hostname=ubuntuworkernode3,kubernetes.io/os=linux
+```
+
+2. create `labels` and attach to `nodes` and query the labels
+```
+$ kubectl label node ubuntuworkernode2 disk=local_ssd
+node/ubuntuworkernode2 labeled
+$ kubectl label node ubuntuworkernode3 hardware=local_gpu
+node/ubuntuworkernode3 labeled
+
+$ kubectl get node -L disk,hardware
+NAME                STATUS   ROLES                  AGE    VERSION   DISK        HARDWARE
+ubuntucontrol       Ready    control-plane,master   4d3h   v1.20.1
+ubuntuworkernode1   Ready    <none>                 4d     v1.20.1
+ubuntuworkernode2   Ready    <none>                 4d     v1.20.1   local_ssd
+ubuntuworkernode3   Ready    <none>                 4d     v1.20.1               local_gpu
+```
+
+3. create three pods, two will be using `node` `selectors` and one won't be
+* note 'spec.nodeSelector'
+```
+cat <<EOF | tee PodsToNodes.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod-ssd
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+  nodeSelector:
+    disk: local_ssd
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod-gpu
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+  nodeSelector:
+    hardware: local_gpu
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+EOF
+
+$ kubectl apply -f PodsToNodes.yaml
+pod/nginx-pod-ssd created
+pod/nginx-pod-gpu created
+pod/nginx-pod created
+```
+
+4. validate the pods are on the nodes as per their nodeSelectors:
+```
+$ kubectl get node -L disk,hardware
+NAME                STATUS   ROLES                  AGE    VERSION   DISK        HARDWARE
+ubuntucontrol       Ready    control-plane,master   4d3h   v1.20.1
+ubuntuworkernode1   Ready    <none>                 4d     v1.20.1
+ubuntuworkernode2   Ready    <none>                 4d     v1.20.1   local_ssd
+ubuntuworkernode3   Ready    <none>                 4d     v1.20.1               local_gpu
+
+$ kubectl get pods -o wide
+NAME            READY   STATUS    RESTARTS   AGE     IP                NODE                NOMINATED NODE   READINESS GATES
+nginx-pod       1/1     Running   0          5m14s   192.168.28.103    ubuntuworkernode1   <none>           <none>
+nginx-pod-gpu   1/1     Running   0          5m14s   192.168.236.227   ubuntuworkernode3   <none>           <none>
+nginx-pod-ssd   1/1     Running   0          5m14s   192.168.132.165   ubuntuworkernode2   <none>           <none>
+```
+
+5. clean up
+```
+#remove labels from nodes
+kubectl label node ubuntuworkernode2 disk-
+kubectl label node ubuntuworkernode3 hardware-
+kubectl delete pod nginx-pod
+kubectl delete pod nginx-pod-gpu
+kubectl delete pod nginx-pod-ssd
+```
+
+### introducing and working with annotations
+* an annotation is a non-hierarchival key-value pair
+  * not used by `Selectors` (only `labels` can be used for this)
+* keys can be up to 63 chars
+* values can be up to 256KB
+* used to add additional info about your cluster resources
+* used by people or tooling
+  * used to make decisions about what to do...
+  * ie: build, releases, image info
+* reduces the need to merge data from external data sources
+
+#### adding and editing annotations
+
+1. manifest example:
+```
+apiVersion: v1
+kind: pod
+metadata:
+  name: nginx-pod
+  annotation: owner: Anthony
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+```
+
+2. kubectl example
+```
+kubectl annotate pod nginx-pod owner=Anthony
+kubectl annotate pod nginx-pod owner=NotAnthony --overwrite
+```
+
+### overall organizational methods: namespaces, labels, selectors, annotations
+* namespaces:
+  * when you want to put a boundary around resources, security or naming
+* labels:
+  * when you want to act on objects in groups or influence k8s operations (via Selectors)
+* annotations
+  * when you want to add additional info about a resource
+
+## running and managing pods
+
+### understanding pods
+
+* what is a pod
+  * a wrapper around container based application
+* what is kubernetes
+  * manages and schedules pods
+* generally there is a single container per pod, but can be many
+* pod has resources
+  * storage, networking, env vars, etc.
+
+#### what is a pod in kubernetes
+* a pod is a unit of scheduling
+  * the scheduler needs to allocate pods in the clsuter (onto nodes) based on resources
+  * the pod is an OS process consuming resources somewhere on the cluster
+* a pod is the unit of deployment
+  * it is the application configuration
+  * it is the needed resources (networking, storage, etc)
+
+#### why do you need pods?
+* provide a higher level abstraction in the cluster for managability reasons.
+
+### how pods manage containers
+* single container pods: most common... single container... single pod.
+* multicontainer pods:
+  * tightly couple apps
+  * producer-consumer relationship
+* init containers:
+  * run before an app container runs
+
+
+### introduccting and working with single container pods and controllers
+* most common scenario
+* single process running in a container
+* leads to easier app scaling (minimizing process)
+
+#### controllers and pods
+* controllers:
+  * keep your apps in a desired state
+  * start and stop pods (to conform to desired state, `replicaset`)
+  * app scaling (as per desired state)
+  * app recover (as per desired state)
+* generally, you don't want to run bare/naked pods
+  * they won't be recreated in the event of a failure
+
+### introducing and working with static pods
+* pods that are managed by `kubelet` on specific nodes
+* static pod manifests are created and can be pushed to nodes
+  * `staticPodPath` in `kubelet` resident manifests
+    * push the manifest to the directory `/etc/kubernetes/manifests`
+* static pod manifests are how control plane pods are configured!
+  * kubeadm bootstrapping process creates these manifests
+* can configure the `kubelet` via the file `/var/lib/kubelet/config.yaml`
+* `staticPodPath` is watched by the `kubelet`
+  * manifest changes are also monitored
+* pods created this way are managed by the `kubelet` itself, not the `API Server`
+  * however, the `kubelet` creates a "mirror" pod "pointer" and files it into `etcd`
+
+### working with pods kubectl exec, logs and port-forward
+
+![](2023-04-03-15-06-52.png)
+* start a process using `exec` or stream logs with `log`:
+```
+kubectl exec -it POD1 --container CONTAINERS1 -- /bin/bash
+kubectl logs POD1 --container CONTAINER1
+```
+* what happens:
+  * opens connection to API server
+  * API server commands pod to start the process
+  * output will be streamed through API server to local host
+* port forwarding into container:
+```
+kubectl port-forward pod POD1 LOCALPORT:CONTAINERPORT
+```
+
+### demo: running bare pods and pods in controllers
+1. create manifests
+* `pod.yaml` contains a bare pod
+* `deployment.yaml` contains a deployment (replicaset)
+
+```
+cat <<EOF | tee pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-world-pod
+spec:
+  containers:
+  - name: hello-world
+    image: psk8s.azurecr.io/hello-app:1.0
+    ports:
+    - containerPort: 80
+EOF
+cat <<EOF | tee deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-world
+  template:
+    metadata:
+      labels:
+        app: hello-world
+    spec:
+      containers:
+      - name: hello-world
+        image: psk8s.azurecr.io/hello-app:1.0
+        ports:
+        - containerPort: 8080
+EOF
+```
+
+2. start kubectl with get events, then apply the manifests
+```
+$ kubectl get events --watch &
+
+$ kubectl apply -f pod.yaml
+pod/hello-world-pod created
+$ LAST SEEN   TYPE     REASON      OBJECT                MESSAGE
+0s          Normal   Scheduled   pod/hello-world-pod   Successfully assigned default/hello-world-pod to ubuntuworkernode2
+0s          Normal   Pulled      pod/hello-world-pod   Container image "psk8s.azurecr.io/hello-app:1.0" already present on machine
+0s          Normal   Created     pod/hello-world-pod   Created container hello-world
+0s          Normal   Started     pod/hello-world-pod   Started container hello-world
+
+$ kubectl apply -f deplokubectl apply -f deployment.yaml
+deployment.apps/hello-world created
+$ 0s          Normal   ScalingReplicaSet   deployment/hello-world   Scaled up replica set hello-world-5f7cd95c4b to 1
+0s          Normal   SuccessfulCreate    replicaset/hello-world-5f7cd95c4b   Created pod: hello-world-5f7cd95c4b-zc8kl
+0s          Normal   Scheduled           pod/hello-world-5f7cd95c4b-zc8kl    Successfully assigned default/hello-world-5f7cd95c4b-zc8kl to ubuntuworkernode1
+0s          Normal   Pulled              pod/hello-world-5f7cd95c4b-zc8kl    Container image "psk8s.azurecr.io/hello-app:1.0" already present on machine
+0s          Normal   Created             pod/hello-world-5f7cd95c4b-zc8kl    Created container hello-world
+0s          Normal   Started             pod/hello-world-5f7cd95c4b-zc8kl    Started container hello-world
+```
+
+3. scale the replicaset from 1 to 2 replicas:
+
+```
+$ kubectl scale deployment hello-world --replicas=2
+deployment.apps/hello-world scaled
+$ 0s          Normal   ScalingReplicaSet   deployment/hello-world              Scaled up replica set hello-world-5f7cd95c4b to 2
+0s          Normal   SuccessfulCreate    replicaset/hello-world-5f7cd95c4b   Created pod: hello-world-5f7cd95c4b-svpng
+0s          Normal   Scheduled           pod/hello-world-5f7cd95c4b-svpng    Successfully assigned default/hello-world-5f7cd95c4b-svpng to ubuntuworkernode3
+0s          Normal   Pulled              pod/hello-world-5f7cd95c4b-svpng    Container image "psk8s.azurecr.io/hello-app:1.0" already present on machine
+0s          Normal   Created             pod/hello-world-5f7cd95c4b-svpng    Created container hello-world
+0s          Normal   Started             pod/hello-world-5f7cd95c4b-svpng    Started container hello-world
+```
+
+4. scale the replicaset from 2 to 1 replicas:
+```
+$ kubectl scale deployment hello-world --replicas=1
+deployment.apps/hello-world scaled
+$ 0s          Normal   ScalingReplicaSet   deployment/hello-world              Scaled down replica set hello-world-5f7cd95c4b to 1
+0s          Normal   Killing             pod/hello-world-5f7cd95c4b-svpng    Stopping container hello-world
+0s          Normal   SuccessfulDelete    replicaset/hello-world-5f7cd95c4b   Deleted pod: hello-world-5f7cd95c4b-svpng
+```
+
+5. execute a process /bin/sh in a pod from the deployment
+```
+$ kubectl get pods
+NAME                           READY   STATUS    RESTARTS   AGE
+hello-world-5f7cd95c4b-zc8kl   1/1     Running   0          4m29s
+hello-world-pod                1/1     Running   0          5m2s
+
+$ kubectl -v 6 exec -it hello-world-5f7cd95c4b-zc8kl -- /bin/sh
+I0403 19:17:05.036261  165850 loader.go:379] Config loaded from file:  /home/matt/.kube/config
+I0403 19:17:05.051705  165850 round_trippers.go:445] GET https://172.16.94.10:6443/api/v1/namespaces/default/pods/hello-world-5f7cd95c4b-zc8kl 200 OK in 5 milliseconds
+I0403 19:17:05.077222  165850 round_trippers.go:445] POST https://172.16.94.10:6443/api/v1/namespaces/default/pods/hello-world-5f7cd95c4b-zc8kl/exec?command=%2Fbin%2Fsh&container=hello-world&stdin=true&stdout=true&tty=true 101 Switching Protocols in 18 milliseconds
+                                                        /app # ps
+PID   USER     TIME  COMMAND
+    1 root      0:00 ./hello-app
+   10 root      0:00 /bin/sh
+   16 root      0:00 ps
+/app # hostname
+hello-world-5f7cd95c4b-zc8kl
+/app # exit
+```
+
+### demo: running pods and using kubectl port-forward to access a pod's application
+
+1. obtain the node where the pod deployed within a replicaset is running:
+```
+# get the node where the pod is running
+$ kubectl get pods -o wide
+NAME                           READY   STATUS    RESTARTS   AGE     IP                NODE                NOMINATED NODE   READINESS GATES
+hello-world-5f7cd95c4b-zc8kl   1/1     Running   0          7m35s   192.168.28.104    ubuntuworkernode1   <none>           <none>
+hello-world-pod                1/1     Running   0          8m8s    192.168.132.166   ubuntuworkernode2   <none>           <none>
+```
+
+2. ssh to this node, then see the "containered" process running on the node!
+```
+ssh matt@ubuntuworkernode1
+matt@ubuntuworkernode1:~$ ps -aux | grep hello-app
+root       78899  0.0  0.0 713304  3832 ?        Ssl  19:11   0:00 ./hello-app
+matt       81857  0.0  0.0   4020  2140 pts/0    S+   19:21   0:00 grep --color=auto hello-app
+exit
+```
+
+3. (back on control plane node) set up a port-forwarding
+
+```
+$ kubectl port-forward hello-world-5f7cd95c4b-zc8kl 8080:8080 &
+[2] 169790
+Forwarding from 127.0.0.1:8080 -> 8080
+Forwarding from [::1]:8080 -> 8080
+
+$ curl http://localhost:8080
+Handling connection for 8080
+Hello, world!
+Version: 1.0.0
+hello-world-5f7cd95c4b-zc8kl
+```
+
+4. kill the port forward, and clearn up
+```
+fg
+ctrl-c
+kubectl delete deployment hello-world
+kubectl delete pods hello-world-pod
+$ jobs
+[1]+  Running                 kubectl get events --watch &
+$ fg 1
+kubectl get events --watch
+ctrl-c
+```
+
+### demo: working with static pods
+
+1. on the control plane node: create a manifest and push to `ubuntuworkernode1` and create a static pod manifest:
+```
+$ kubectl run hello-world --image=gcr.io/google-samples/hello-app2.0 --dry-run=client -o yaml --port=8080
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: null
+  labels:
+    run: hello-world
+  name: hello-world
+spec:
+  containers:
+  - image: gcr.io/google-samples/hello-app2.0
+    name: hello-world
+    ports:
+    - containerPort: 8080
+    resources: {}
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}
+```
+
+2. on a worker node: create the static pod manifest
+* remember static pods are created by CREATING A MANIFEST in the `staticPodPath` ON A NODE ITSELF!!!
+  * `kubelet` on the node will instantiate the pod immediately as the path is FS watched for changes then config ingested.
+```
+# locate where the static pod manifest should live
+$ sudo cat /var/lib/kubelet/config.yaml | grep staticPodPath
+staticPodPath: /etc/kubernetes/manifests
+
+# create the static pod manifest
+cat <<EOF | sudo tee /etc/kubernetes/manifests/mypod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: null
+  labels:
+    run: hello-world
+  name: hello-world
+spec:
+  containers:
+  - image: gcr.io/google-samples/hello-app:2.0
+    name: hello-world
+    ports:
+    - containerPort: 8080
+    resources: {}
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}
+EOF
+```
+
+3. on the control plane node (where the `kubectl` client is configed), confirm that the worker node has pushed the necessary entries into `etcd` and interrogation about the static pod is available via calls to the API Server
+* note the static pod is named `hello-world-ubuntuworkernode1`
+```
+$ kubectl get pods -o wide
+NAME                            READY   STATUS    RESTARTS   AGE   IP                NODE                NOMINATED NODE   READINESS GATES
+hello-world-5f7cd95c4b-zc8kl    1/1     Running   0          52m   192.168.28.104    ubuntuworkernode1   <none>           <none>
+hello-world-pod                 1/1     Running   0          53m   192.168.132.166   ubuntuworkernode2   <none>           <none>
+hello-world-ubuntuworkernode1   1/1     Running   0          17s   192.168.28.106    ubuntuworkernode1   <none>           <none>
+```
+
+4. delete the static pod entry in `etcd` via the same call you'd use to trigger a pod deletion in the cluster
+* if you delete the pod, it deletes the entry in `etcd` but will NOT delete the static pod (on the node for which kubelet instantiated).
+* once the entry is deleted via the kubectl client's call to the API server, and the API Server's call to `etcd`, the kubelet on the node will immediately be like "yea nah" and trigger an entry back into `etcd`.
+
+```
+$ kubectl delete pod hello-world-ubuntuworkernode1
+pod "hello-world-ubuntuworkernode1" deleted
+
+#note the age of the entry for the static pod:
+$ kubectl get pods -o wide
+NAME                            READY   STATUS    RESTARTS   AGE   IP                NODE                NOMINATED NODE   READINESS GATES
+hello-world-5f7cd95c4b-zc8kl    1/1     Running   0          54m   192.168.28.104    ubuntuworkernode1   <none>           <none>
+hello-world-pod                 1/1     Running   0          55m   192.168.132.166   ubuntuworkernode2   <none>           <none>
+hello-world-ubuntuworkernode1   1/1     Running   0          10s   192.168.28.106    ubuntuworkernode1   <none>           <none>
+```
+
+5. delete the static pod entry on ubuntuworkernode1
+```
+matt@ubuntuworkernode1:~$ sudo rm -rf /etc/kubernetes/manifests/mypod.yaml
+matt@ubuntucontrol:~$ kubectl get pods -o wide
+No resources found in default namespace.
+```
+
+### introducing and working with multi-container pods
+
+
+### demo: running multi-container pods and sharing data between containers in a pod
+### introducing and workign with init containers
+### demo: workign with init containers
+### pod lifecycle, stopping/terminating pods and persistency of pods
+### introducing and workign with container restart policy
+### demo: pod lifecycle and container restart policy
+### defining pod health: `livenessProbes`, `readinessProbes` and `startupProbes`
+### configuring and defining container probes
+### demo: implementing container probes: livenessProbues and readinessProbes
+### demo: implementing container probes: startupProbes
