@@ -1,4 +1,4 @@
-* https://app.pluralsight.com/course-player?clipId=c340043b-980a-4341-bd1d-6bdfe710028e
+* https://app.pluralsight.com/course-player?clipId=a0abcd55-183c-406c-8620-c65adc0b6718
 
 # plan overview
 1. Kubernetes Installation and Configuration Fundamentals (3h 4m)
@@ -4132,14 +4132,466 @@ No resources found in default namespace.
 ```
 
 ### introducing and working with multi-container pods
+* why multi container pod
+  * tightly coupled apps == processes are scheduled together on the same nodes.
+  * requirement on some shared resources between containers
+    * usually one process is generating data while the other process consumes the data
+* you do not use multicontainer pods for scheduling... you use labels and namespaces
 
+#### yaml code example
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multicontainer-pod
+spec:
+  containers:
+  - name: nfinx
+    image: nfinx
+      ports:
+      - containerPort: 80
+  - name: alpine
+    image: alpine
+```
+
+#### common anti-pattern for multi-container pods
+* you don't want to put the web and database server in the same pods
+  * problems:
+    * recovery options
+    * limits scalability
+
+#### shared resources in a pod
+* networking:
+  * containers in the pod share the name OS namespace, including network namespace
+  * all pods share the same loopback interface, used for comms over `localhost`
+  * be mindful of app port conflicts (must be unique)
+* storage:
+  * each container image has it's own file system
+  * volumes (persistentVolume claim) are defined at the Pod level
+    * they are shared resources among the containers in a pod
+    * mounted into the containers' file system
+    * common way for containers to exchange data
 
 ### demo: running multi-container pods and sharing data between containers in a pod
-### introducing and workign with init containers
-### demo: workign with init containers
+1. create the declarative config:
+* note the two `containers.name` entries
+* note the use of `volumes`, and the `volumes.name` reference within each `containers.volumemounts.name`
+  * `emptyDir` is a volume type that will be written locally on node
+  * this will be a shared volume
+  * this is a NOT PERSISTENT store
+
+```
+cat << EOF | tee multicontainer-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multicontainer-pod
+spec:
+  containers:
+  - name: producer
+    image: ubuntu
+    command: ["/bin/bash"]
+    args: ["-c", "while true; do echo $(hostname) $(date) >> /var/log/index.html; sleep 10; done"]
+    volumeMounts:
+    - name: webcontent
+      mountPath: /var/log
+  - name: consumer
+    image: nginx
+    ports:
+      - containerPort: 80
+    volumeMounts:
+    - name: webcontent
+      mountPath: /usr/share/nginx/html
+  volumes:
+  - name: webcontent 
+    emptyDir: {}
+EOF
+```
+
+2. deploy
+```
+kubectl apply -f multicontainer-pod.yaml
+$ kubectl get pods
+NAME                 READY   STATUS    RESTARTS   AGE
+multicontainer-pod   2/2     Running   0          30s
+```
+
+3. open shell on producer container
+*if you don't specify a container, then `kubectl exec` will default to the first container in the config
+
+```
+$ kubectl exec -it multicontainer-pod -- /bin/sh
+Defaulting container name to producer.
+Use 'kubectl describe pod/multicontainer-pod -n default' to see all of the containers in this pod.
+# ls -al /var/log
+total 12
+drwxrwxrwx  2 root root 4096 Apr 10 16:36 .
+drwxr-xr-x 11 root root 4096 Mar  8 02:08 ..
+-rw-r--r--  1 root root  516 Apr 10 16:38 index.html
+# tail /var/log/index.html
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+exit
+```
+
+4. open shell on consumer container
+```
+$ kubectl exec -it multicontainer-pod --container consumer -- /bin/sh
+# ls -al /usr/share/nginx/html
+total 12
+drwxrwxrwx 2 root root 4096 Apr 10 16:36 .
+drwxr-xr-x 3 root root 4096 Mar 28 22:20 ..
+-rw-r--r-- 1 root root 1032 Apr 10 16:40 index.html
+# tail /usr/share/nginx/html/index.html
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+ubuntucontrol Mon Apr 10 16:27:42 UTC 2023
+exit
+```
+
+5. create a tunnel and access the container
+```
+kubectl port-forward multicontainer-pod 8080:80 & 
+curl http://localhost:8080
+fg
+ctrl-c
+```
+
+6. clean up pod
+```
+$ kubectl delete pod multicontainer-pod
+pod "multicontainer-pod" deleted
+0s          Normal   Killing     pod/multicontainer-pod   Stopping container producer
+0s          Normal   Killing     pod/multicontainer-pod   Stopping container consumer
+```
+
+
+### introducing and working with init containers
+
+#### init containers
+* containers that run before main app container is started
+* commonly used to run tools setup environment/apps
+* must run to completion
+* can have multiple in a pod, which are execed sequentially, all must run for main app to run
+* when init container fails... container `restartPolicy` applies
+ * by default kubelet restarts containers
+
+#### when to use init containers
+* run tools or utilities to set up env
+* separation of duties
+  * can run init container at high priv, and app can run at low priv
+* block container setup
+
+#### manifest example
+* note the use of multiple `initContainers` (which will be executed in the order in which they are located in the manifest)
+```
+apiVersion: v1
+king: pod
+spec:
+  initContainers:
+  - name: init-service
+    image: ubuntu
+    command: ['sh', '-c', "echo waiting for service; sleep 2]
+  - name init-database
+    image: ubuntu
+    command: ['sh', '-c', "echo waiting for service; sleep 2]
+containers:
+  - name: app-container
+    image: nginx
+```
+
+### demo: working with init containers
+1. instantiate a manifest
+```
+cat << EOF | tee init-containers.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-containers
+spec:
+  initContainers:
+  - name: init-service
+    image: ubuntu
+    command: ['sh', '-c', "echo waiting for service; sleep 2"]
+  - name: init-database
+    image: ubuntu
+    command: ['sh', '-c', "echo waiting for database; sleep 2"]
+  containers:
+  - name: app-container
+    image: nginx
+EOF
+```
+
+2. subscribe to pod activity stream
+```
+kubectl get pods --watch &
+```
+
+3. declare the pod and kill the `kubectl --watch`
+```
+kubectl apply -f init-containers.yaml
+#will then init some pods and progress through: pending-> init:0/2, then init:1/2, then PodInitializing, then running
+fg
+ctrl-c
+```
+
+4. review details
+* note the fields for `Init Containers`, note `state` and `reason`
+```
+$ kubectl describe pods init-containers
+Name:         init-containers
+Namespace:    default
+Priority:     0
+Node:         ubuntuworkernode1/172.16.94.11
+Start Time:   Mon, 10 Apr 2023 17:45:15 +0000
+Labels:       <none>
+Annotations:  cni.projectcalico.org/containerID: 36de8cf8f5d7bc296a4547cec40c900d05e15c2d16593abb249ce597eb5a7ec1
+              cni.projectcalico.org/podIP: 192.168.28.107/32
+              cni.projectcalico.org/podIPs: 192.168.28.107/32
+Status:       Running
+IP:           192.168.28.107
+IPs:
+  IP:  192.168.28.107
+Init Containers:
+  init-service:
+    Container ID:  containerd://7f7c8536328cd052c3dd51a10c6736730f4e9a9ef93fc3a915e23534f16af844
+    Image:         ubuntu
+    Image ID:      docker.io/library/ubuntu@sha256:67211c14fa74f070d27cc59d69a7fa9aeff8e28ea118ef3babc295a0428a6d21
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+      -c
+      echo waiting for service; sleep 2
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Mon, 10 Apr 2023 17:45:24 +0000
+      Finished:     Mon, 10 Apr 2023 17:45:26 +0000
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-b44wj (ro)
+  init-database:
+    Container ID:  containerd://f6a343bf6caefda93e4c3646b75e151876c7d36b607fbb28fa6c928994b36cb7
+    Image:         ubuntu
+    Image ID:      docker.io/library/ubuntu@sha256:67211c14fa74f070d27cc59d69a7fa9aeff8e28ea118ef3babc295a0428a6d21
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+      -c
+      echo waiting for database; sleep 2
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Mon, 10 Apr 2023 17:45:28 +0000
+      Finished:     Mon, 10 Apr 2023 17:45:30 +0000
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-b44wj (ro)
+Containers:
+  app-container:
+    Container ID:   containerd://f03fe9e3c60ab6adb8e3b1f6ee9bf780781a232494d89bd7eed7a8124dfe2cfc
+    Image:          nginx
+    Image ID:       docker.io/library/nginx@sha256:2ab30d6ac53580a6db8b657abf0f68d75360ff5cc1670a85acb5bd85ba1b19c0
+    Port:           <none>
+    Host Port:      <none>
+    State:          Running
+      Started:      Mon, 10 Apr 2023 17:45:31 +0000
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-b44wj (ro)
+Conditions:
+  Type              Status
+  Initialized       True
+  Ready             True
+  ContainersReady   True
+  PodScheduled      True
+Volumes:
+  default-token-b44wj:
+    Type:        Secret (a volume populated by a Secret)
+    SecretName:  default-token-b44wj
+    Optional:    false
+QoS Class:       BestEffort
+Node-Selectors:  <none>
+Tolerations:     node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                 node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  10m   default-scheduler  Successfully assigned default/init-containers to ubuntuworkernode1
+  Normal  Pulling    10m   kubelet            Pulling image "ubuntu"
+  Normal  Pulled     10m   kubelet            Successfully pulled image "ubuntu" in 8.358356759s
+  Normal  Created    10m   kubelet            Created container init-service
+  Normal  Started    10m   kubelet            Started container init-service
+  Normal  Pulling    10m   kubelet            Pulling image "ubuntu"
+  Normal  Pulled     10m   kubelet            Successfully pulled image "ubuntu" in 348.142825ms
+  Normal  Created    10m   kubelet            Created container init-database
+  Normal  Started    10m   kubelet            Started container init-database
+  Normal  Pulling    10m   kubelet            Pulling image "nginx"
+  Normal  Pulled     10m   kubelet            Successfully pulled image "nginx" in 322.707829ms
+  Normal  Created    10m   kubelet            Created container app-container
+  Normal  Started    10m   kubelet            Started container app-container
+```
+
+5. delete the resources declared int eh manifest
+```
+$ kubectl delete -f init-containers.yaml
+pod "init-containers" deleted
+```
+
 ### pod lifecycle, stopping/terminating pods and persistency of pods
-### introducing and workign with container restart policy
+
+#### phases of a pod lifecycle
+* creation
+ * done administratively or by a Controller
+* running
+ * scheduled to a node
+* termination
+ * process is terminated/crashed
+ * pod is deleted (administratively or by a controller)
+ * pod is evicted due to lack of hardware resources
+ * node failures or maintenance
+ * no pod is redeployed... they are recreated
+
+#### stopping/terminating a pod
+1. user or controller sends notice to `API server` to delete pods
+2. `API server` is updated with a grace period time (30 seconds by default)... time k8s cluster is allowing the pod to shut down on it's own.
+3. pods are listed as "Terminating" (in `etcd`)
+4. `kubelet` on node will see the pod is marked as "terminating" and then send a `SIGTERM` to the processes within the container.
+5. `Service Endpoints` and `Controllers` are updated to the status of the pods, and then the pod is deleted.
+6. If the grace period expires, then `kubelet` will send a `SIGKILL` to the processes.
+7. `API server`/`etcd` are updated.
+
+* grace period timer can be configured
+  * imperatively
+  ```
+  kubectl delete pod [name] --grace-period=[seconds]
+  #force deletions (note that you must get a shell on the node and clean up detached processes)
+  kubectl delete pod [name] --grace-period=0 --force
+  ```
+  * declaratively
+  ```
+  apiVersion: v1
+  kind: Pod
+  metadata:
+    name: hello-world-pod
+  spec:
+    terminationGracePeriodSeconds: 10
+    containers:
+    - name: hello-world
+      image: gcr.io/google-samples/hello-app:1.0
+  ```
+#### persistency of pods
+* a pod isn't redeployed, it's created
+  * if a pod stops, a new one is created based on its controller
+  * go back to the original container image(s) in the Pod definition
+* how is state/configuration decoupled?
+* configuration is managed externally
+  * pod manifests, `secrets` and `ConfigMaps`
+  * passing env vars into containers
+* data persistency is managed externally
+  * `PersistentVolume`
+  * `PersistentVolumeClaim`
+
+### introducing and working with container restart policy
+* a container in a pod can restart independant of the pod itself
+* applies to containers inside a pod and defined inside the pod's spec
+* pod is the env that the container runs in
+* pods not rescheduled to another node, but restarted by the kubelet on that node
+* restarts with an exponential backoff timer (10s, 20s, 40s, eventually to 5m), this timer is reset after 10 mins of successful runtime
+
+#### different configs for restart policy
+* `Always`: default, will restart all containers inside a pod
+* `OnFailure`: when terminations occur without an exitcode of 0
+* `Never`: never restart
+
+#### pod with container restart policy declarative manifest
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+spec:
+  containers:
+  - name:nginx
+    image: nginx
+  restartPolicy: OnFailure
+```
+
 ### demo: pod lifecycle and container restart policy
+1. instantiate a pod manifest
+
+```
+cat << EOF | tee pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-world-pod
+spec:
+  containers:
+  - name: hello-world
+    image: psk8s.azurecr.io/hello-app:1.0
+    ports:
+    - containerPort: 80
+EOF
+```
+
+2. start a `kubectl get events --watch` and then create a pod
+```
+$ kubectl get events --watch &
+[1] 3044943
+$ kubectl apply -f pod.yaml
+pod/hello-world-pod created
+$ LAST SEEN   TYPE     REASON      OBJECT                MESSAGE
+0s          Normal   Scheduled   pod/hello-world-pod   Successfully assigned default/hello-world-pod to ubuntuworkernode1
+0s          Normal   Pulled      pod/hello-world-pod   Container image "psk8s.azurecr.io/hello-app:1.0" already present on machine
+0s          Normal   Created     pod/hello-world-pod   Created container hello-world
+0s          Normal   Started     pod/hello-world-pod   Started container hello-world
+```
+
+3. run a `ps` within the pod, then `killall` the app, then 
+* note container restartPolicy being set to Always by default restarts the container if it dies.
+```
+$ kubectl exec -it hello-world-pod -- ps
+PID   USER     TIME  COMMAND
+    1 root      0:00 ./hello-app
+   11 root      0:00 ps
+
+$ kubectl exec -it hello-world-pod -- /usr/bin/killall hello-app
+command terminated with exit code 137
+$ 0s          Normal   Pulled      pod/hello-world-pod   Container image "psk8s.azurecr.io/hello-app:1.0" already present on machine
+0s          Normal   Created     pod/hello-world-pod   Created container hello-world
+0s          Normal   Started     pod/hello-world-pod   Started container hello-world
+
+$ kubectl get pods
+NAME                 READY   STATUS    RESTARTS   AGE
+hello-world-pod      1/1     Running   1          2m40s
+```
+
+
+
 ### defining pod health: `livenessProbes`, `readinessProbes` and `startupProbes`
 ### configuring and defining container probes
 ### demo: implementing container probes: livenessProbues and readinessProbes
